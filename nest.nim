@@ -1,7 +1,8 @@
 import asynchttpserver, asyncdispatch
 import router
+import tables
 
-export Request
+export Request, Params
 
 type
   NestServer = ref object
@@ -13,15 +14,15 @@ type
 proc newNestServer* () : NestServer =
   let routing = newRouter()
 
-  proc dispatch(req: Request) {.async.} =
+  proc dispatch(req: Request) {.async, gcsafe.} =
     let requestPath = req.url.path
-    let requestHandler = routing.match(requestPath)
+    let handler = routing.match(requestPath)
 
-    if requestHandler == nil:
+    if handler == nil:
       echo "No mapping found for path '", requestPath, "'"
       await req.respond(Http404, "Resource not found!")
     else:
-      let content = requestHandler(req)
+      let content = handler(req, initTable[string, string]())
       await req.respond(Http200, content)
 
   return NestServer(
@@ -35,3 +36,18 @@ proc run*(nest : NestServer, portNum : int) =
 
 proc addRoute*(nest : NestServer, requestPath : string, handler : RequestHandler) =
   nest.router.route(requestPath, handler)
+
+template onPort*(portNum, actions: untyped): untyped =
+  let server {.inject.} = newNestServer()
+  try:
+    actions
+    server.run(portNum)
+  finally:
+    discard
+
+template map*(path, actions:untyped) : untyped =
+  server.addRoute(path, proc (request:Request, params:Params) : string {.gcsafe.} = actions)
+template map*(path, request, actions:untyped) : untyped =
+  server.addRoute(path, proc (request:Request, params:Params) : string {.gcsafe.} = actions)
+template map*(path, request, params, actions:untyped) : untyped =
+  server.addRoute(path, proc (request:Request, params:Params) : string {.gcsafe.} = actions)

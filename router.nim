@@ -1,5 +1,6 @@
 import critbits
 import strutils
+import tables
 from asynchttpserver import Request
 
 #
@@ -11,7 +12,8 @@ const allowedUrlChars = {'a'..'z', 'A'..'Z', '0'..'9', '-', '.', '_', '~', '/', 
 const allowedPatternChars = allowedUrlChars + {wildcard} #the star character is used for patterns
 
 type
-  RequestHandler* = proc (req: Request) : string
+  Params* = Table[string, string]
+  RequestHandler* = proc (req: Request, params: Params) : string {.gcsafe.}
 
   RoutingNode = ref object
     wildcards : CritBitTree[RoutingNode]

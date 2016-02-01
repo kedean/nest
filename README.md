@@ -5,7 +5,27 @@ RESTful API's with Nim
 This is an attempt at creating a framework for REST API's using [Nim](http://nim-lang.org). It is still in very early alpha stages.
 
 ## Usage
-To use Nest, add an import to it to your code with `import nest`. Instantiate a server with `newNestServer`, then use the `addRoute` method to add new routes. You may use the asterisk ('*') as a wildcard character in your route definitions.
+To use Nest, add an import to it to your code with `import nest`.
+
+### Template based server
+The preferred way to use Nest is with the provided templates: `onPort` and `map`. The `onPort` template takes the port number to server on as an argument, and provides the server to all code under its view. `map` will create a new route from the given path, and use the provided block as the handler. If a second parameter is provided, it is filled with the request context. If a third is provided, it contains a table of the URL parameters.
+
+```nim
+import nest
+
+onPort(8080):
+  map("/", request, parameters):
+    return "this is the root page"
+  map("/foo", request):
+    return "this only took the request context"
+  map("/bar"):
+    return "this took no extra arguments"
+```
+
+Using the templates style means you don't have to worry about keeping track of your server, nor do you need to remember the syntax of a RequestHandler procedure.
+
+### Procedural server
+Instantiate a server with `newNestServer`, then use the `addRoute` method to add new routes. You may use the asterisk ('*') as a wildcard character in your route definitions.
 
 Example:
 ```nim
@@ -13,35 +33,11 @@ import nest
 
 let server = newNestServer()
 
-server.addRoute("/", (proc (req:Request) : string =
-  return """
-  <html>
-  <body>
-  I am the root page
-  <br/><br/>
-  <a href="/leaf">Go to leaf page</a><br />
-  <a href="/foo/bar">Go to page with wildcard</a>
-  </body>
-  </html>
-  """
+server.addRoute("/", (proc (req:Request, params:Params) : string =
+  return "this is the root page"
 ))
-server.addRoute("/leaf", (proc (req:Request) : string =
-  return """
-  <html>
-  <body>
-  I am a leaf page
-  <br/><br/>
-  <a href="/">Go back</a>
-  """
-))
-server.addRoute("/*/bar", (proc (req:Request) : string =
-  return """
-  <html>
-  <body>
-  I used a wildcard path. Try changing "foo" to something else!
-  <br/><br/>
-  <a href="/">Go back</a>
-  """
+server.addRoute("/*/foo", (proc (req:Request, params:Params) : string =
+  return "this is a leaf page, generated with a wildcard"
 ))
 
 echo "Starting server..."
