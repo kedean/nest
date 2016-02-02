@@ -4,6 +4,15 @@ RESTful API's with Nim
 ## Intro
 This is an attempt at creating a framework for REST API's using [Nim](http://nim-lang.org). It is still in very early alpha stages.
 
+## Is this usable?
+Not at all. Check back soon.
+
+## Coming soon
+- parameterized mappings
+- mappings for POST, HEAD, OPTION, DELETE, PUT, instead of just GET
+- documentation!
+- response editing?
+
 ## Usage
 To use Nest, add an import to it to your code with `import nest`.
 
