@@ -34,7 +34,7 @@ onPort(8080):
 Using the templates style means you don't have to worry about keeping track of your server, nor do you need to remember the syntax of a RequestHandler procedure.
 
 ### Procedural server
-Instantiate a server with `newNestServer`, then use the `addRoute` method to add new routes. You may use the asterisk ('*') as a wildcard character in your route definitions.
+If you prefer to get down with the bare code, you can instantiate a server with `newNestServer`, then use the `addRoute` method to add new routes. You may use the asterisk ('*') as a wildcard character in your route definitions.
 
 Example:
 ```nim
