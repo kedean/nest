@@ -17,6 +17,7 @@ proc newNestServer* () : NestServer =
   proc dispatch(req: Request) {.async, gcsafe.} =
     let requestPath = req.url.path
     let handler = routing.match(requestPath)
+    echo requestPath
 
     if handler == nil:
       echo "No mapping found for path '", requestPath, "'"

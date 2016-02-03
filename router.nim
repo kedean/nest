@@ -1,5 +1,7 @@
 import critbits
 import strutils
+import parseutils
+import sequtils
 import tables
 from asynchttpserver import Request
 
@@ -7,90 +9,163 @@ from asynchttpserver import Request
 #Type Declarations
 #
 
+const allowedCharsInUrl = {'a'..'z', 'A'..'Z', '0'..'9', '-', '.', '_', '~', '/', '?', '&', '='}
 const wildcard = '*'
-const allowedUrlChars = {'a'..'z', 'A'..'Z', '0'..'9', '-', '.', '_', '~', '/', '?', '&', '='}
-const allowedPatternChars = allowedUrlChars + {wildcard} #the star character is used for patterns
+const startParam = '{'
+const endParam = '}'
+const specialSectionStartChars = {wildcard, startParam}
+const allowedCharsInPattern = allowedCharsInUrl + {wildcard, startParam, endParam}
 
 type
   Params* = Table[string, string]
   RequestHandler* = proc (req: Request, params: Params) : string {.gcsafe.}
+  RequestHandlerDef* = tuple[handler : RequestHandler, params : Params]
 
-  RoutingNode = ref object
-    wildcards : CritBitTree[RoutingNode]
-    leafHandler : RequestHandler
-  Router* = RoutingNode
+  MatcherPieceType = enum
+    matcherWildcard,
+    matcherParam,
+    matcherText
+  MatcherPiece = object
+    case kind : MatcherPieceType:
+      of matcherParam, matcherText:
+        value : string
+      of matcherWildcard:
+        discard
+  PathMatcher = tuple
+    pattern : seq[MatcherPiece]
+    handler : RequestHandler
 
-#
-#Debugging Helper Procedures
-#
-proc nodeType(node : RoutingNode) : string =
-  if node.leafHandler != nil:
-    if node.wildcards.len() > 0:
-      return "handler+container"
-    else:
-      return "handler"
-  else:
-    return "container"
-
-proc printRoutingTree*(parentNode : RoutingNode, level : int = 0) =
-  for path, childNode in parentNode.wildcards.pairs():
-    echo("  ".repeat(level), path, " -> ", nodeType(childNode))
-    if childNode.wildcards.len() > 0:
-      printRoutingTree(childNode, level + 1)
+  Router* = ref object
+    staticPaths : CritBitTree[RequestHandler]
+    pathMatchers : seq[PathMatcher]
 
 #
 #Constructor
 #
-proc newRouter*() : RoutingNode =
-  return RoutingNode(leafHandler:nil, wildcards:CritBitTree[RoutingNode]())
+proc newRouter*() : Router =
+  return Router(pathMatchers:newSeq[PathMatcher](), staticPaths:CritBitTree[RequestHandler]())
 
 #
 #Procedures to add routes
 #
-proc route*(node : RoutingNode, pattern : string, handler : RequestHandler, level : int = 0) =
-  assert(pattern.allCharsInSet(allowedPatternChars))
-  let wildcardFirstIndex = pattern.find(wildcard)
+proc generatePatternSequence(pattern : string, startIndex : int = 0) : seq[MatcherPiece] =
+  var token : string
+  let tokenSize = pattern.parseUntil(token, specialSectionStartChars, startIndex)
+  var newStartIndex = startIndex + tokenSize
 
-  if wildcardFirstIndex == -1: #no wildcards
-    if node.wildcards.contains(pattern):
-      let subNode = node.wildcards[pattern]
-      assert(subNode.leafHandler == nil)
-      subNode.leafHandler = handler
+  if newStartIndex < pattern.len():
+    let specialChar = pattern[newStartIndex]
+    newStartIndex += 1
+
+    var scanner : MatcherPiece
+
+    if specialChar == wildcard:
+      scanner = MatcherPiece(kind:matcherWildcard)
+    elif specialChar == startParam:
+      var paramName : string
+      let paramNameSize = pattern.parseUntil(paramName, endParam, newStartIndex)
+      newStartIndex += (paramNameSize + 1)
+      scanner = MatcherPiece(kind:matcherParam, value:paramName)
     else:
-      node.wildcards[pattern] = RoutingNode(leafHandler:handler, wildcards:CritBitTree[RoutingNode]())
-  else: #parse to the first one, then recurse
-    let prefix = pattern.substr(0, wildcardFirstIndex-1)
-    let suffix = pattern.substr(wildcardFirstIndex+1)
+      doAssert(false, "Unrecognized special character") #TODO: handle this better?
 
-    var subNode : RoutingNode
+    let next = generatePatternSequence(pattern, newStartIndex)
 
-    if node.wildcards.contains(prefix):
-      subNode = node.wildcards[prefix]
-    else:
-      subNode = RoutingNode(wildcards:CritBitTree[RoutingNode]())
-      node.wildcards[prefix] = subNode
+    return concat(@[MatcherPiece(kind:matcherText, value:token), scanner], next)
+  else:
+    return @[MatcherPiece(kind:matcherText, value:token)]
 
-    subNode.route(suffix, handler, level + 1)
 
-  if level == 0: echo "Created mapping for '", pattern, "'"
+proc route*(router : Router, pattern : string, handler : RequestHandler) =
+  doAssert(pattern.allCharsInSet(allowedCharsInPattern))
+
+  if pattern.allCharsInSet(allowedCharsInUrl): #static cases do not need to be matched against
+    router.staticPaths[pattern] = handler
+  else:
+    router.pathMatchers.add((pattern:generatePatternSequence(pattern), handler:handler))
+
+  #TODO: ensure the path does not conflict with an existing one
+  echo "Created mapping for '", pattern, "'"
 
 #
 # Procedures to match against paths
+#
 
-proc match*(node : RoutingNode, path : string) : RequestHandler {. noSideEffect .} #forward declaration
-proc checkWildcard(node : RoutingNode, path : string) : RequestHandler {. noSideEffect .}
+proc parse(pattern, path : string) : Params =
+  var token : string;
+  var tokenSize = pattern.parseUntil(token, specialSectionStartChars)
+  echo token, " ", tokenSize
 
-proc checkWildcard(node : RoutingNode, path : string) : RequestHandler =
-  for matcher, childNode in node.wildcards.pairs():
-    if path.endsWith(matcher): #perfect match
-      return childNode.leafHandler
-    elif path.contains(matcher): #partial match
-      let wildcardEndIndex = path.find(matcher)
-      let pathSuffix = path.substr(wildcardEndIndex) #everything after the part of the path this matches
-      return childNode.match(pathSuffix)
+proc match(router : Router, path : string) : RequestHandlerDef =
+  if router.staticPaths.contains(path): #basic url, see if its in the list on its own first, guaranteed no conflicts with matcher characters
+    return (handler: router.staticPaths[path], params: initTable[string, string]())
+  else: #check for a match
+    for matcher in router.pathMatchers:
+      block checkMatch:
+        var scanningWildcard, scanningParameter = false
+        var parameterBeingScanned : string
+        var pathIndex = 0
+        var params = initTable[string, string]()
 
-proc match(node : RoutingNode, path : string) : RequestHandler =
-  if node.wildcards.contains(path): #see if there is a direct match first
-    return node.wildcards[path].leafHandler
-  else: ## now see if any of the wildcards will match. This is slower, since its guaranteed O(n)
-    return node.checkWildcard(path)
+        for piece in matcher.pattern:
+          echo piece.kind
+          case piece.kind:
+            of matcherText:
+              if scanningWildcard or scanningParameter:
+                if piece.value == "": #end of pieces to pattern, close out the scanning
+                  if scanningParameter:
+                    params[parameterBeingScanned] = path.substr(pathIndex)
+                  scanningWildcard = false
+                  scanningParameter = false
+                elif not path.contains(piece.value):
+                  break checkMatch
+                else: #skip forward til end of wildcard, then past the encountered text
+                  let paramEndIndex = path.find(piece.value, pathIndex) - 1
+                  if scanningParameter:
+                    params[parameterBeingScanned] = path.substr(pathIndex, paramEndIndex)
+                  pathIndex = paramEndIndex + piece.value.len() + 1
+                  scanningWildcard = false
+                  scanningParameter = false
+              else:
+                if path.continuesWith(piece.value, pathIndex):
+                  pathIndex += piece.value.len()
+                else:
+                  break checkMatch
+            of matcherWildcard:
+              scanningWildcard = true
+            of matcherParam:
+              scanningParameter = true
+              parameterBeingScanned = piece.value
+
+        if not scanningWildcard and not scanningParameter:
+          return (handler:matcher.handler, params:params)
+
+
+
+
+
+let r = newRouter()
+r.route("/foo/{p}/bar/*/breh/{r}", proc (req: Request, params: Params) : string {.gcsafe.} = echo "test")
+let (handler, params) = r.match("/foo/test/bar/pre/breh/d")
+echo " "
+echo params["p"]
+echo params["r"]
+
+when false:
+  proc match*(node : RoutingNode, path : string) : RequestHandler {. noSideEffect .} #forward declaration
+  proc checkWildcard(node : RoutingNode, path : string) : RequestHandler {. noSideEffect .}
+
+  proc checkWildcard(node : RoutingNode, path : string) : RequestHandler =
+    for matcher, childNode in node.wildcards.pairs():
+      if path.endsWith(matcher): #perfect match
+        return childNode.leafHandler
+      elif path.contains(matcher): #partial match
+        let wildcardEndIndex = path.find(matcher)
+        let pathSuffix = path.substr(wildcardEndIndex) #everything after the part of the path this matches
+        return childNode.match(pathSuffix)
+
+  proc match(node : RoutingNode, path : string) : RequestHandler =
+    if node.wildcards.contains(path): #see if there is a direct match first
+      return node.wildcards[path].leafHandler
+    else: ## now see if any of the wildcards will match. This is slower, since its guaranteed O(n)
+      return node.checkWildcard(path)
