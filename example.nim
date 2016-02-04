@@ -33,7 +33,7 @@ onPort(8080):
     <a href="/">Go back</a>
     """
 
-  map("/parameterized/{test}", request, params):
+  map("/parameterized/{test}/", request, params):
     return """
     <html>
     <body>

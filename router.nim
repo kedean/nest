@@ -75,9 +75,12 @@ proc generatePatternSequence(pattern : string, startIndex : int = 0) : seq[Match
   else:
     return @[MatcherPiece(kind:matcherText, value:token)]
 
-
 proc route*(router : Router, pattern : string, handler : RequestHandler) =
   doAssert(pattern.allCharsInSet(allowedCharsInPattern))
+
+  #if a url ends in a forward slash, we discard it and consider the matcher the same as without it
+  var pattern = pattern
+  pattern.removeSuffix('/')
 
   if pattern.allCharsInSet(allowedCharsInUrl): #static cases do not need to be matched against
     router.staticPaths[pattern] = handler
@@ -97,18 +100,20 @@ proc parse(pattern, path : string) : Params =
   echo token, " ", tokenSize
 
 proc match*(router : Router, path : string) : RequestHandlerDef =
+  var path = path
+  path.removeSuffix('/') #trailing slashes are considered redundant
+
   if router.staticPaths.contains(path): #basic url, see if its in the list on its own first, guaranteed no conflicts with matcher characters
     return (handler: router.staticPaths[path], params: initTable[string, string]())
   else: #check for a match
     for matcher in router.pathMatchers:
-      block checkMatch:
+      block checkMatch: #a single run, this can be broken if anything checked doesn't match
         var scanningWildcard, scanningParameter = false
         var parameterBeingScanned : string
         var pathIndex = 0
         var params = initTable[string, string]()
 
         for piece in matcher.pattern:
-          echo piece.kind
           case piece.kind:
             of matcherText:
               if scanningWildcard or scanningParameter:
@@ -132,8 +137,10 @@ proc match*(router : Router, path : string) : RequestHandlerDef =
                 else:
                   break checkMatch
             of matcherWildcard:
+              assert(not scanningWildcard and not scanningParameter)
               scanningWildcard = true
             of matcherParam:
+              assert(not scanningWildcard and not scanningParameter)
               scanningParameter = true
               parameterBeingScanned = piece.value
 
