@@ -96,7 +96,7 @@ proc parse(pattern, path : string) : Params =
   var tokenSize = pattern.parseUntil(token, specialSectionStartChars)
   echo token, " ", tokenSize
 
-proc match(router : Router, path : string) : RequestHandlerDef =
+proc match*(router : Router, path : string) : RequestHandlerDef =
   if router.staticPaths.contains(path): #basic url, see if its in the list on its own first, guaranteed no conflicts with matcher characters
     return (handler: router.staticPaths[path], params: initTable[string, string]())
   else: #check for a match
@@ -139,33 +139,3 @@ proc match(router : Router, path : string) : RequestHandlerDef =
 
         if not scanningWildcard and not scanningParameter:
           return (handler:matcher.handler, params:params)
-
-
-
-
-
-let r = newRouter()
-r.route("/foo/{p}/bar/*/breh/{r}", proc (req: Request, params: Params) : string {.gcsafe.} = echo "test")
-let (handler, params) = r.match("/foo/test/bar/pre/breh/d")
-echo " "
-echo params["p"]
-echo params["r"]
-
-when false:
-  proc match*(node : RoutingNode, path : string) : RequestHandler {. noSideEffect .} #forward declaration
-  proc checkWildcard(node : RoutingNode, path : string) : RequestHandler {. noSideEffect .}
-
-  proc checkWildcard(node : RoutingNode, path : string) : RequestHandler =
-    for matcher, childNode in node.wildcards.pairs():
-      if path.endsWith(matcher): #perfect match
-        return childNode.leafHandler
-      elif path.contains(matcher): #partial match
-        let wildcardEndIndex = path.find(matcher)
-        let pathSuffix = path.substr(wildcardEndIndex) #everything after the part of the path this matches
-        return childNode.match(pathSuffix)
-
-  proc match(node : RoutingNode, path : string) : RequestHandler =
-    if node.wildcards.contains(path): #see if there is a direct match first
-      return node.wildcards[path].leafHandler
-    else: ## now see if any of the wildcards will match. This is slower, since its guaranteed O(n)
-      return node.checkWildcard(path)
