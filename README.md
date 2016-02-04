@@ -8,8 +8,8 @@ This is an attempt at creating a framework for REST API's using [Nim](http://nim
 Not at all. Check back soon.
 
 ## Coming soon
-- parameterized mappings
-- mappings for POST, HEAD, OPTION, DELETE, PUT, instead of just GET
+- parameters for form data
+- easier way to access request contents
 - documentation!
 - response editing?
 
