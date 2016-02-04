@@ -1,8 +1,10 @@
 import asynchttpserver, asyncdispatch
 import router
 import tables
+import strtabs
 
-export Request, Params
+export Request, Params, tables, strtabs
+export router.`[]`
 
 type
   NestServer = ref object
@@ -10,19 +12,20 @@ type
       dispatchMethod: proc (req:Request) : Future[void] {.closure, gcsafe.}
       router: Router
 
-
 proc newNestServer* () : NestServer =
   let routing = newRouter()
 
   proc dispatch(req: Request) {.async, gcsafe.} =
     let requestPath = req.url.path
-    let handler = routing.match(requestPath)
+    let queryString = req.url.query
+    let (handler, params) = routing.match(requestPath, queryString)
 
     if handler == nil:
-      echo "No mapping found for path '", requestPath, "'"
+      let fullPath = requestPath & (if queryString.len() > 0: "?" & queryString else: "")
+      echo "No mapping found for path '", fullPath, "'"
       await req.respond(Http404, "Resource not found!")
     else:
-      let content = handler(req, initTable[string, string]())
+      let content = handler(req, params)
       await req.respond(Http200, content)
 
   return NestServer(
