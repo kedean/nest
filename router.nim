@@ -38,9 +38,13 @@ type
     pattern : seq[MatcherPiece]
     handler : RequestHandler
 
-  Router* = ref object
+  MethodRouter = ref object
     staticPaths : CritBitTree[RequestHandler]
     pathMatchers : seq[PathMatcher]
+
+  Router* = ref object
+    methodRouters : CritBitTree[MethodRouter]
+
 
 proc `[]`*(params : Params, key : string) : string {.noSideEffect.} =
   ##[ Safely get a parameter of either kind, or the empty string if it does not exist. Path parameters take precedence over conflicting query parameters. ]##
@@ -55,12 +59,15 @@ proc `[]`*(params : Params, key : string) : string {.noSideEffect.} =
 #Constructor
 #
 proc newRouter*() : Router =
-  return Router(pathMatchers:newSeq[PathMatcher](), staticPaths:CritBitTree[RequestHandler]())
+  return Router(methodRouters : CritBitTree[MethodRouter]())
+
+proc newMethodRouter() : MethodRouter =
+  return MethodRouter(pathMatchers:newSeq[PathMatcher](), staticPaths:CritBitTree[RequestHandler]())
 
 #
 #Procedures to add routes
 #
-proc generatePatternSequence(pattern : string, startIndex : int = 0) : seq[MatcherPiece] =
+proc generatePatternSequence(pattern : string, startIndex : int = 0) : seq[MatcherPiece] {.noSideEffect.} =
   var token : string
   let tokenSize = pattern.parseUntil(token, specialSectionStartChars, startIndex)
   var newStartIndex = startIndex + tokenSize
@@ -85,8 +92,9 @@ proc generatePatternSequence(pattern : string, startIndex : int = 0) : seq[Match
   else:
     return @[MatcherPiece(kind:matcherText, value:token)]
 
-proc route*(router : Router, pattern : string, handler : RequestHandler) =
+proc route*(router : Router, reqMethod : string, pattern : string, handler : RequestHandler) {.gcsafe.} =
   doAssert(pattern.allCharsInSet(allowedCharsInPattern))
+  let reqMethod = reqMethod.toLower()
 
   #if a url ends in a forward slash, we discard it and consider the matcher the same as without it
   var pattern = pattern
@@ -95,22 +103,20 @@ proc route*(router : Router, pattern : string, handler : RequestHandler) =
   if not (pattern[0] == '/'): #ensure each pattern is relative to root
     pattern.insert("/")
 
+  discard router.methodRouters.containsOrIncl(reqMethod, newMethodRouter()) #guarantee the method has a set of mappings
+  let methodRouter = router.methodRouters[reqMethod]
+
   if pattern.allCharsInSet(allowedCharsInUrl): #static cases do not need to be matched against
-    router.staticPaths[pattern] = handler
+    methodRouter.staticPaths[pattern] = handler
   else:
-    router.pathMatchers.add((pattern:generatePatternSequence(pattern), handler:handler))
+    methodRouter.pathMatchers.add((pattern:generatePatternSequence(pattern), handler:handler))
 
   #TODO: ensure the path does not conflict with an existing one
-  echo "Created mapping for '", pattern, "'"
+  echo "Created ", reqMethod, " mapping for '", pattern, "'"
 
 #
 # Procedures to match against paths
 #
-
-proc parse(pattern, path : string) : Params =
-  var token : string;
-  var tokenSize = pattern.parseUntil(token, specialSectionStartChars)
-  echo token, " ", tokenSize
 
 proc extractQueryParams(query : string) : StringTableRef {.noSideEffect.} =
   var index = 0
@@ -134,53 +140,57 @@ proc extractQueryParams(query : string) : StringTableRef {.noSideEffect.} =
   return result
 
 
-proc match*(router : Router, path : string, query : string = "") : RequestHandlerDef {.noSideEffect.} =
-  var path = path
-  if path != "/": #the root string is special
-    path.removeSuffix('/') #trailing slashes are considered redundant
+proc match*(router : Router, reqMethod : string, path : string, query : string = "") : RequestHandlerDef {.noSideEffect.} =
+  let reqMethod = reqMethod.toLower()
 
-  let queryParams = query.extractQueryParams()
+  if router.methodRouters.contains(reqMethod):
+    let methodRouter = router.methodRouters[reqMethod]
+    var path = path
+    if path != "/": #the root string is special
+      path.removeSuffix('/') #trailing slashes are considered redundant
 
-  if router.staticPaths.contains(path): #basic url, see if its in the list on its own first, guaranteed no conflicts with matcher characters
-    return (handler: router.staticPaths[path], params: Params(pathParams:newStringTable(), queryParams:queryParams))
-  else: #check for a match
-    for matcher in router.pathMatchers:
-      block checkMatch: #a single run, this can be broken if anything checked doesn't match
-        var scanningWildcard, scanningParameter = false
-        var parameterBeingScanned : string
-        var pathIndex = 0
-        var pathParams = newStringTable()
+    let queryParams = query.extractQueryParams()
 
-        for piece in matcher.pattern:
-          case piece.kind:
-            of matcherText:
-              if scanningWildcard or scanningParameter:
-                if piece.value == "": #end of pieces to pattern, close out the scanning
-                  if scanningParameter:
-                    pathParams[parameterBeingScanned] = path.substr(pathIndex)
-                  scanningWildcard = false
-                  scanningParameter = false
-                elif not path.contains(piece.value):
-                  break checkMatch
-                else: #skip forward til end of wildcard, then past the encountered text
-                  let paramEndIndex = path.find(piece.value, pathIndex) - 1
-                  if scanningParameter:
-                    pathParams[parameterBeingScanned] = path.substr(pathIndex, paramEndIndex)
-                  pathIndex = paramEndIndex + piece.value.len() + 1
-                  scanningWildcard = false
-                  scanningParameter = false
-              else:
-                if path.continuesWith(piece.value, pathIndex):
-                  pathIndex += piece.value.len()
+    if methodRouter.staticPaths.contains(path): #basic url, see if its in the list on its own first, guaranteed no conflicts with matcher characters
+      return (handler: methodRouter.staticPaths[path], params: Params(pathParams:newStringTable(), queryParams:queryParams))
+    else: #check for a match
+      for matcher in methodRouter.pathMatchers:
+        block checkMatch: #a single run, this can be broken if anything checked doesn't match
+          var scanningWildcard, scanningParameter = false
+          var parameterBeingScanned : string
+          var pathIndex = 0
+          var pathParams = newStringTable()
+
+          for piece in matcher.pattern:
+            case piece.kind:
+              of matcherText:
+                if scanningWildcard or scanningParameter:
+                  if piece.value == "": #end of pieces to pattern, close out the scanning
+                    if scanningParameter:
+                      pathParams[parameterBeingScanned] = path.substr(pathIndex)
+                    scanningWildcard = false
+                    scanningParameter = false
+                  elif not path.contains(piece.value):
+                    break checkMatch
+                  else: #skip forward til end of wildcard, then past the encountered text
+                    let paramEndIndex = path.find(piece.value, pathIndex) - 1
+                    if scanningParameter:
+                      pathParams[parameterBeingScanned] = path.substr(pathIndex, paramEndIndex)
+                    pathIndex = paramEndIndex + piece.value.len() + 1
+                    scanningWildcard = false
+                    scanningParameter = false
                 else:
-                  break checkMatch
-            of matcherWildcard:
-              assert(not scanningWildcard and not scanningParameter)
-              scanningWildcard = true
-            of matcherParam:
-              assert(not scanningWildcard and not scanningParameter)
-              scanningParameter = true
-              parameterBeingScanned = piece.value
+                  if path.continuesWith(piece.value, pathIndex):
+                    pathIndex += piece.value.len()
+                  else:
+                    break checkMatch
+              of matcherWildcard:
+                assert(not scanningWildcard and not scanningParameter)
+                scanningWildcard = true
+              of matcherParam:
+                assert(not scanningWildcard and not scanningParameter)
+                scanningParameter = true
+                parameterBeingScanned = piece.value
 
-        if not scanningWildcard and not scanningParameter:
-          return (handler:matcher.handler, params:Params(pathParams:pathParams, queryParams:queryParams))
+          if not scanningWildcard and not scanningParameter:
+            return (handler:matcher.handler, params:Params(pathParams:pathParams, queryParams:queryParams))

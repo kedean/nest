@@ -2,7 +2,7 @@ import nest
 import strutils
 
 onPort(8080):
-  map("/", request):
+  get("/", request):
     return """
     <html>
     <body>
@@ -12,11 +12,12 @@ onPort(8080):
     <a href="/foo/bar">Go to page with wildcard</a><br />
     <a href="/parameterized/testParam">Go to page with path parameters</a><br />
     <a href="/queryString?test1=foo&test2=bar">Go to page with query parameters</a><br />
+    <a href="/form">Go to page with a POST form</a><br />
     </body>
     </html>
     """
 
-  map("/leaf"):
+  get("/leaf"):
     return """
     <html>
     <body>
@@ -25,7 +26,32 @@ onPort(8080):
     <a href="/">Go back</a>
     """
 
-  map("/*/bar"):
+  get("/form"):
+    return """
+    <html>
+    <body>
+    This is a form, try submitting it!
+    <form method="POST" action="/form">
+      <textarea name="content"></textarea>
+      <input type="submit" />
+    </form>
+    <br/>
+    <a href="/">Go back</a>
+    </body>
+    </html>
+    """
+
+  post("/form", request):
+    return """
+    <html>
+    <body>
+    Form content was:<br/>$1<br /><br />
+    <a href="/">Go back</a>
+    </body>
+    </html>
+    """.format(request.body)
+
+  get("/*/bar"):
     return """
     <html>
     <body>
@@ -34,7 +60,7 @@ onPort(8080):
     <a href="/">Go back</a>
     """
 
-  map("/parameterized/{test}/", request, params):
+  get("/parameterized/{test}/", request, params):
     return """
     <html>
     <body>
@@ -43,7 +69,7 @@ onPort(8080):
     <a href="/">Go back</a>
     """.format(params.pathParams["test"])
 
-  map("/queryString", request, params):
+  get("/queryString", request, params):
     return """
     <html>
     <body>
