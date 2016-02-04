@@ -44,3 +44,6 @@ echo "Starting server..."
 
 server.run(8080)
 ```
+
+### Accessing parameters
+Named parameters may be specified in mappings with `{paramName}`. The params variable passed to the callback has two properties, `pathParams` and `queryParams`, both of which are implemented with Nim's [strtabs](http://nim-lang.org/docs/strtabs.html) module. It is suggested that you access parameters with `.getOrDefault(key : string)` to avoid exceptions. You may also use `params[key]` to safely get a parameter of either type, or an empty string if it is not found (path parameter take precedence over any conflicting query parameters). See example.nim for more.
