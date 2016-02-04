@@ -23,11 +23,11 @@ The preferred way to use Nest is with the provided templates: `onPort` and `map`
 import nest
 
 onPort(8080):
-  map("/", request, parameters):
+  get("/", request, parameters):
     return "this is the root page"
-  map("/foo", request):
+  get("/foo", request):
     return "this only took the request context"
-  map("/bar"):
+  get("/bar"):
     return "this took no extra arguments"
 ```
 
@@ -42,10 +42,10 @@ import nest
 
 let server = newNestServer()
 
-server.addRoute("/", (proc (req:Request, params:Params) : string =
+server.addRoute("/", nest.GET, (proc (req:Request, params:Params) : string =
   return "this is the root page"
 ))
-server.addRoute("/*/foo", (proc (req:Request, params:Params) : string =
+server.addRoute("/*/foo", nest.GET, (proc (req:Request, params:Params) : string =
   return "this is a leaf page, generated with a wildcard"
 ))
 

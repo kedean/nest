@@ -52,12 +52,12 @@ template onPort*(portNum, actions: untyped): untyped =
 # Templates to simplify writing handlers
 
 const
-  GET = "get"
-  POST = "post"
-  HEAD = "head"
-  OPTIONS = "options"
-  PUT = "put"
-  DELETE = "delete"
+  GET* = "get"
+  POST* = "post"
+  HEAD* = "head"
+  OPTIONS* = "options"
+  PUT* = "put"
+  DELETE* = "delete"
 
 template get*(path, actions:untyped) : untyped =
   server.addRoute(GET, path, proc (request:Request, params:Params) : string {.gcsafe.} = actions)
