@@ -1,10 +1,9 @@
 import asynchttpserver, asyncdispatch
-import router
+import router, extractors
 import tables
 import strtabs
 
-export Request, Params, tables, strtabs
-export router.`[]`
+export Request, tables, strtabs
 
 type
   NestServer = ref object
@@ -19,14 +18,15 @@ proc newNestServer* () : NestServer =
     let requestMethod = req.reqMethod
     let requestPath = req.url.path
     let queryString = req.url.query
-    let (handler, params) = routing.match(requestMethod, requestPath, queryString)
+    let (handler, pathParams) = routing.match(requestMethod, requestPath)
+    let queryParams = queryString.extractQueryParams()
 
     if handler == nil:
       let fullPath = requestPath & (if queryString.len() > 0: "?" & queryString else: "")
       echo "No mapping found for path '", fullPath, "' with method '", requestMethod, "'"
       await req.respond(Http404, "Resource not found!")
     else:
-      let content = handler(req, params)
+      let content = handler(req, pathParams, queryParams)
       await req.respond(Http200, content)
 
   return NestServer(
@@ -49,7 +49,9 @@ template onPort*(portNum, actions: untyped): untyped =
   finally:
     discard
 
+#
 # Templates to simplify writing handlers
+#
 
 const
   GET* = "get"
@@ -59,44 +61,41 @@ const
   PUT* = "put"
   DELETE* = "delete"
 
+template map*(reqMethod, path, actions:untyped) : untyped =
+  server.addRoute(reqMethod, path, proc (request:Request, pathParams:StringTableRef, queryParams:StringTableRef) : string {.gcsafe.} =
+    let request {.inject.} = request
+    let pathParams {.inject.} = pathParams
+    let queryParams {.inject.} = queryParams
+    actions)
+
 template get*(path, actions:untyped) : untyped =
-  server.addRoute(GET, path, proc (request:Request, params:Params) : string {.gcsafe.} = actions)
-template get*(path, request, actions:untyped) : untyped =
-  server.addRoute(GET, path, proc (request:Request, params:Params) : string {.gcsafe.} = actions)
-template get*(path, request, params, actions:untyped) : untyped =
-  server.addRoute(GET, path, proc (request:Request, params:Params) : string {.gcsafe.} = actions)
+  map(GET, path, actions)
 
 template post*(path, actions:untyped) : untyped =
-  server.addRoute(POST, path, proc (request:Request, params:Params) : string {.gcsafe.} = actions)
-template post*(path, request, actions:untyped) : untyped =
-  server.addRoute(POST, path, proc (request:Request, params:Params) : string {.gcsafe.} = actions)
-template post*(path, request, params, actions:untyped) : untyped =
-  server.addRoute(POST, path, proc (request:Request, params:Params) : string {.gcsafe.} = actions)
+  map(POST, path, actions)
 
 template head*(path, actions:untyped) : untyped =
-  server.addRoute(HEAD, path, proc (request:Request, params:Params) : string {.gcsafe.} = actions)
-template head*(path, request, actions:untyped) : untyped =
-  server.addRoute(HEAD, path, proc (request:Request, params:Params) : string {.gcsafe.} = actions)
-template head*(path, request, params, actions:untyped) : untyped =
-  server.addRoute(HEAD, path, proc (request:Request, params:Params) : string {.gcsafe.} = actions)
+  map(HEAD, path, actions)
 
 template options*(path, actions:untyped) : untyped =
-  server.addRoute(OPTIONS, path, proc (request:Request, params:Params) : string {.gcsafe.} = actions)
-template options*(path, request, actions:untyped) : untyped =
-  server.addRoute(OPTIONS, path, proc (request:Request, params:Params) : string {.gcsafe.} = actions)
-template options*(path, request, params, actions:untyped) : untyped =
-  server.addRoute(OPTIONS, path, proc (request:Request, params:Params) : string {.gcsafe.} = actions)
+  map(OPTIONS, path, actions)
 
 template put*(path, actions:untyped) : untyped =
-  server.addRoute(PUT, path, proc (request:Request, params:Params) : string {.gcsafe.} = actions)
-template put*(path, request, actions:untyped) : untyped =
-  server.addRoute(PUT, path, proc (request:Request, params:Params) : string {.gcsafe.} = actions)
-template put*(path, request, params, actions:untyped) : untyped =
-  server.addRoute(PUT, path, proc (request:Request, params:Params) : string {.gcsafe.} = actions)
+  map(PUT, path, actions)
 
 template delete*(path, actions:untyped) : untyped =
-  server.addRoute(DELETE, path, proc (request:Request, params:Params) : string {.gcsafe.} = actions)
-template delete*(path, request, actions:untyped) : untyped =
-  server.addRoute(DELETE, path, proc (request:Request, params:Params) : string {.gcsafe.} = actions)
-template delete*(path, request, params, actions:untyped) : untyped =
-  server.addRoute(DELETE, path, proc (request:Request, params:Params) : string {.gcsafe.} = actions)
+  map(DELETE, path, actions)
+
+#
+# Parameter extraction templates
+#
+
+template pathParam*(key : string) : string =
+  ## Safely gets a single parameter from the path, or an empty string if it doesn't exist
+  pathParams.getOrDefault(key)
+template queryParam*(key : string) : string =
+  ## Safely gets a single parameter from the query string, or an empty string if it doesn't exist
+  queryParams.getOrDefault(key)
+template param*(key : string) : string =
+  ## Safely gets a single parameter from either the path or query string, or an empty string if it doesn't exist. Path parameters take precedence
+  (if pathParams.hasKey(key): pathParams[key] elif queryParams.hasKey(key): queryParams[key] else: "")

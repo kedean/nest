@@ -17,12 +17,7 @@ const specialSectionStartChars = {wildcard, startParam}
 const allowedCharsInPattern = allowedCharsInUrl + {wildcard, startParam, endParam}
 
 type
-  Params* = object
-    pathParams* : StringTableRef
-    queryParams* : StringTableRef
-
-  RequestHandler* = proc (req: Request, params: Params) : string {.gcsafe.}
-  RequestHandlerDef* = tuple[handler : RequestHandler, params : Params]
+  RequestHandler* = proc (req: Request, pathParams : StringTableRef, queryParams : StringTableRef) : string {.gcsafe.}
 
   MatcherPieceType = enum
     matcherWildcard,
@@ -44,16 +39,6 @@ type
 
   Router* = ref object
     methodRouters : CritBitTree[MethodRouter]
-
-
-proc `[]`*(params : Params, key : string) : string {.noSideEffect.} =
-  ##[ Safely get a parameter of either kind, or the empty string if it does not exist. Path parameters take precedence over conflicting query parameters. ]##
-  if params.pathParams.hasKey(key):
-    return params.pathParams[key]
-  elif params.queryParams.hasKey(key):
-    return params.queryParams[key]
-  else:
-    return ""
 
 #
 #Constructor
@@ -118,29 +103,7 @@ proc route*(router : Router, reqMethod : string, pattern : string, handler : Req
 # Procedures to match against paths
 #
 
-proc extractQueryParams(query : string) : StringTableRef {.noSideEffect.} =
-  var index = 0
-  result = newStringTable()
-
-  while index < query.len():
-    var paramValuePair : string
-    let pairSize = query.parseUntil(paramValuePair, '&', index)
-
-    index += pairSize + 1
-
-    let equalIndex = paramValuePair.find('=')
-
-    if equalIndex == -1: #no equals, just a boolean "existance" variable
-      result[paramValuePair] = "" #just insert a record into the param table to indicate that it exists
-    else: #is a 'setter' parameter
-      let paramName = paramValuePair.substr(0, equalIndex - 1)
-      let paramValue = paramValuePair.substr(equalIndex + 1)
-      result[paramName] = paramValue
-
-  return result
-
-
-proc match*(router : Router, reqMethod : string, path : string, query : string = "") : RequestHandlerDef {.noSideEffect.} =
+proc match*(router : Router, reqMethod : string, path : string) : tuple[handler : RequestHandler, pathParams : StringTableRef] {.noSideEffect.} =
   let reqMethod = reqMethod.toLower()
 
   if router.methodRouters.contains(reqMethod):
@@ -149,10 +112,8 @@ proc match*(router : Router, reqMethod : string, path : string, query : string =
     if path != "/": #the root string is special
       path.removeSuffix('/') #trailing slashes are considered redundant
 
-    let queryParams = query.extractQueryParams()
-
     if methodRouter.staticPaths.contains(path): #basic url, see if its in the list on its own first, guaranteed no conflicts with matcher characters
-      return (handler: methodRouter.staticPaths[path], params: Params(pathParams:newStringTable(), queryParams:queryParams))
+      return (handler: methodRouter.staticPaths[path], pathParams:newStringTable())
     else: #check for a match
       for matcher in methodRouter.pathMatchers:
         block checkMatch: #a single run, this can be broken if anything checked doesn't match
@@ -193,4 +154,4 @@ proc match*(router : Router, reqMethod : string, path : string, query : string =
                 parameterBeingScanned = piece.value
 
           if not scanningWildcard and not scanningParameter:
-            return (handler:matcher.handler, params:Params(pathParams:pathParams, queryParams:queryParams))
+            return (handler:matcher.handler, pathParams:pathParams)

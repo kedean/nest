@@ -2,7 +2,7 @@ import nest
 import strutils
 
 onPort(8080):
-  get("/", request):
+  get("/"):
     return """
     <html>
     <body>
@@ -41,7 +41,7 @@ onPort(8080):
     </html>
     """
 
-  post("/form", request):
+  post("/form"):
     return """
     <html>
     <body>
@@ -60,22 +60,22 @@ onPort(8080):
     <a href="/">Go back</a>
     """
 
-  get("/parameterized/{test}/", request, params):
+  get("/parameterized/{test}/"):
     return """
     <html>
     <body>
     Your path param was $1. Try changing it to something else!
     <br/><br/>
     <a href="/">Go back</a>
-    """.format(params.pathParams["test"])
+    """.format(pathParam("test"))
 
-  get("/queryString", request, params):
+  get("/queryString"):
     return """
     <html>
     <body>
     Your query param 'test1' was '$1' and 'test2' was '$2'. Try changing it to something else!
     <br/><br/>
     <a href="/">Go back</a>
-    """.format(params["test1"], params.queryParams.getOrDefault("test2"))
+    """.format(queryParam("test1"), queryParam("test2"))
 
   echo "Starting server..."
