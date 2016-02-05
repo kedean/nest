@@ -15,19 +15,32 @@ proc newNestServer* () : NestServer =
   let routing = newRouter()
 
   proc dispatch(req: Request) {.async, gcsafe.} =
-    let requestMethod = req.reqMethod
-    let requestPath = req.url.path
-    let queryString = req.url.query
-    let (handler, pathParams) = routing.match(requestMethod, requestPath)
-    let queryParams = queryString.extractQueryParams()
+    var
+      statusCode : HttpCode
+      content : string
 
-    if handler == nil:
-      let fullPath = requestPath & (if queryString.len() > 0: "?" & queryString else: "")
-      echo "No mapping found for path '", fullPath, "' with method '", requestMethod, "'"
-      await req.respond(Http404, "Resource not found!")
-    else:
-      let content = handler(req, pathParams, queryParams)
-      await req.respond(Http200, content)
+    try:
+      let requestMethod = req.reqMethod
+      let requestPath = req.url.path
+      let queryString = req.url.query
+      let (handler, pathParams) = routing.match(requestMethod, requestPath)
+      let queryParams = queryString.extractQueryParams()
+      let modelParams = req.body.extractFormBody(req.headers.getOrDefault("Content-Type"))
+
+      if handler == nil:
+        let fullPath = requestPath & (if queryString.len() > 0: "?" & queryString else: "")
+        echo "No mapping found for path '", fullPath, "' with method '", requestMethod, "'"
+        statusCode = Http404
+        content = "Page not found"
+      else:
+        statusCode = Http200
+        content = handler(req, pathParams, queryParams, modelParams)
+    except:
+      statusCode = Http500
+      content = "Server error"
+      #TODO: Log the error
+
+    await req.respond(statusCode, content)
 
   return NestServer(
     httpServer: newAsyncHttpServer(),
@@ -62,10 +75,11 @@ const
   DELETE* = "delete"
 
 template map*(reqMethod, path, actions:untyped) : untyped =
-  server.addRoute(reqMethod, path, proc (request:Request, pathParams:StringTableRef, queryParams:StringTableRef) : string {.gcsafe.} =
+  server.addRoute(reqMethod, path, proc (request:Request, pathParams:StringTableRef, queryParams:StringTableRef, modelParams:StringTableRef) : string {.gcsafe.} =
     let request {.inject.} = request
     let pathParams {.inject.} = pathParams
     let queryParams {.inject.} = queryParams
+    let modelParams {.inject.} = modelParams
     actions)
 
 template get*(path, actions:untyped) : untyped =
@@ -96,6 +110,9 @@ template pathParam*(key : string) : string =
 template queryParam*(key : string) : string =
   ## Safely gets a single parameter from the query string, or an empty string if it doesn't exist
   queryParams.getOrDefault(key)
+template modelParam*(key : string) : string =
+  ## Safely gets a single parameter from the model, or an empty string if it doesn't exist
+  modelParams.getOrDefault(key)
 template param*(key : string) : string =
-  ## Safely gets a single parameter from either the path or query string, or an empty string if it doesn't exist. Path parameters take precedence
-  (if pathParams.hasKey(key): pathParams[key] elif queryParams.hasKey(key): queryParams[key] else: "")
+  ## Safely gets a single parameter from the path, query string, or model, or an empty string if it doesn't exist. Path parameters take precedence, followed by query string parameters
+  (if pathParams.hasKey(key): pathParams[key] elif queryParams.hasKey(key): queryParams[key] elif modelParams.hasKey(key): modelParams[key] else: "")

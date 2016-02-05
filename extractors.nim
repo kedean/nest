@@ -1,4 +1,4 @@
-import strtabs, parseutils
+import strtabs, parseutils, strutils
 
 proc extractQueryParams*(query : string) : StringTableRef {.noSideEffect.} =
   var index = 0
@@ -20,3 +20,14 @@ proc extractQueryParams*(query : string) : StringTableRef {.noSideEffect.} =
       result[paramName] = paramValue
 
   return result
+
+const FORM_URL_ENCODED = "application/x-www-form-urlencoded"
+const FORM_MULTIPART_DATA = "multipart/form-data"
+
+proc extractFormBody*(body : string, contentType : string) : StringTableRef {.gcsafe.} =
+  if contentType.startsWith(FORM_URL_ENCODED):
+    return body.extractQueryParams()
+  elif contentType.startsWith(FORM_MULTIPART_DATA):
+    assert(false, "Multipart form data not yet supported")
+  else:
+    return StringTableRef()

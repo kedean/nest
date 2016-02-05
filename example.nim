@@ -32,10 +32,11 @@ onPort(8080):
     <body>
     This is a form, try submitting it!
     <form method="POST" action="/form">
-      <textarea name="content"></textarea>
+      <input type="text" name="field1" /><Br />
+      <input type="text" name="field2" /><Br />
       <input type="submit" />
     </form>
-    <br/>
+    <br/><br />
     <a href="/">Go back</a>
     </body>
     </html>
@@ -45,11 +46,12 @@ onPort(8080):
     return """
     <html>
     <body>
-    Form content was:<br/>$1<br /><br />
+    You submitted a field1 value of '$1' and a field2 value of '$2'
+    <br /><br />
     <a href="/">Go back</a>
     </body>
     </html>
-    """.format(request.body)
+    """.format(modelParam("field1"), modelParam("field2"))
 
   get("/*/bar"):
     return """
