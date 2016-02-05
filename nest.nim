@@ -18,6 +18,7 @@ proc newNestServer* () : NestServer =
     var
       statusCode : HttpCode
       content : string
+      headers = newStringTable()
 
     try:
       let requestMethod = req.reqMethod
@@ -34,13 +35,13 @@ proc newNestServer* () : NestServer =
         content = "Page not found"
       else:
         statusCode = Http200
-        content = handler(req, pathParams, queryParams, modelParams)
+        content = handler(req, headers, pathParams, queryParams, modelParams)
     except:
       statusCode = Http500
       content = "Server error"
       #TODO: Log the error
 
-    await req.respond(statusCode, content)
+    await req.respond(statusCode, content, headers)
 
   return NestServer(
     httpServer: newAsyncHttpServer(),
@@ -75,8 +76,9 @@ const
   DELETE* = "delete"
 
 template map*(reqMethod, path, actions:untyped) : untyped =
-  server.addRoute(reqMethod, path, proc (request:Request, pathParams:StringTableRef, queryParams:StringTableRef, modelParams:StringTableRef) : string {.gcsafe.} =
+  server.addRoute(reqMethod, path, proc (request:Request, responseHeaders : var StringTableRef, pathParams:StringTableRef, queryParams:StringTableRef, modelParams:StringTableRef) : string {.gcsafe.} =
     let request {.inject.} = request
+    let responseHeaders {.inject.} = responseHeaders
     let pathParams {.inject.} = pathParams
     let queryParams {.inject.} = queryParams
     let modelParams {.inject.} = modelParams
@@ -116,3 +118,13 @@ template modelParam*(key : string) : string =
 template param*(key : string) : string =
   ## Safely gets a single parameter from the path, query string, or model, or an empty string if it doesn't exist. Path parameters take precedence, followed by query string parameters
   (if pathParams.hasKey(key): pathParams[key] elif queryParams.hasKey(key): queryParams[key] elif modelParams.hasKey(key): modelParams[key] else: "")
+
+#
+# Header management templates
+#
+
+template sendHeader*(key : string, value : string) =
+  ## Add a new header to the response
+  responseHeaders[key] = value
+template getHeader*(key : string) : string =
+  request.headers.getOrDefault(key)

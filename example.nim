@@ -3,10 +3,11 @@ import strutils
 
 onPort(8080):
   get("/"):
+    sendHeader("x-foo", "bar")
     return """
     <html>
     <body>
-    I am the root page
+    I am the root page. Your user agent is '$1'!
     <br/><br/>
     <a href="/leaf">Go to leaf page</a><br />
     <a href="/foo/bar">Go to page with wildcard</a><br />
@@ -15,7 +16,7 @@ onPort(8080):
     <a href="/form">Go to page with a POST form</a><br />
     </body>
     </html>
-    """
+    """.format(getHeader("User-Agent"))
 
   get("/leaf"):
     return """
