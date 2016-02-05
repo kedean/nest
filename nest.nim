@@ -1,5 +1,5 @@
 import asynchttpserver, asyncdispatch
-import router, extractors
+import router, extractors, logger
 import tables
 import strtabs
 
@@ -12,7 +12,7 @@ const
   OPTIONS* = "options"
   PUT* = "put"
   DELETE* = "delete"
-  
+
 type
   NestServer = ref object
       httpServer: AsyncHttpServer
@@ -38,16 +38,16 @@ proc newNestServer* () : NestServer =
 
       if handler == nil:
         let fullPath = requestPath & (if queryString.len() > 0: "?" & queryString else: "")
-        echo "No mapping found for path '", fullPath, "' with method '", requestMethod, "'"
+        log "No mapping found for path '", fullPath, "' with method '", requestMethod, "'"
         statusCode = Http404
         content = "Page not found"
       else:
         statusCode = Http200
         content = handler(req, headers, pathParams, queryParams, modelParams)
     except:
+      log "Internal error occured:\n\t", getCurrentExceptionMsg()
       statusCode = Http500
-      content = "Server error"
-      #TODO: Log the error
+      content = "Internal server error"
 
     await req.respond(statusCode, content, headers)
 
@@ -60,5 +60,6 @@ proc newNestServer* () : NestServer =
 proc run*(nest : NestServer, portNum : int) =
   waitFor nest.httpServer.serve(Port(portNum), nest.dispatchMethod)
 
-proc addRoute*(nest : NestServer, requestMethod : string, requestPath : string, handler : RequestHandler) =
-  nest.router.route(requestMethod, requestPath, handler)
+proc addRoute*(nest : NestServer, reqMethod : string, reqPath : string, handler : RequestHandler) =
+  nest.router.route(reqMethod, reqPath, handler)
+  log "Created ", reqMethod, " mapping for '", reqPath, "'"

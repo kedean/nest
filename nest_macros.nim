@@ -1,4 +1,4 @@
-import nest
+import nest, logger
 export nest
 
 template onPort*(portNum, actions: untyped): untyped =
@@ -47,16 +47,28 @@ template delete*(path, actions:untyped) : untyped =
 
 template pathParam*(key : string) : string =
   ## Safely gets a single parameter from the path, or an empty string if it doesn't exist
-  pathParams.getOrDefault(key)
+  try:
+    pathParams[key]
+  except:
+    log "No path parameter found called '", key, "'"
+    ""
 template queryParam*(key : string) : string =
   ## Safely gets a single parameter from the query string, or an empty string if it doesn't exist
-  queryParams.getOrDefault(key)
+  try:
+    queryParams[key]
+  except:
+    log "No query parameter found called '", key, "'"
+    ""
 template modelParam*(key : string) : string =
   ## Safely gets a single parameter from the model, or an empty string if it doesn't exist
-  modelParams.getOrDefault(key)
+  try:
+    modelParams[key]
+  except:
+    log "No model parameter found called '", key, "'"
+    ""
 template param*(key : string) : string =
   ## Safely gets a single parameter from the path, query string, or model, or an empty string if it doesn't exist. Path parameters take precedence, followed by query string parameters
-  (if pathParams.hasKey(key): pathParams[key] elif queryParams.hasKey(key): queryParams[key] elif modelParams.hasKey(key): modelParams[key] else: "")
+  (if pathParams.hasKey(key): pathParams[key] elif queryParams.hasKey(key): queryParams[key] elif modelParams.hasKey(key): modelParams[key] else: log("No parameter found called '", key, "'"); "")
 
 #
 # Header management templates
@@ -66,4 +78,8 @@ template sendHeader*(key : string, value : string) =
   ## Add a new header to the response
   responseHeaders[key] = value
 template getHeader*(key : string) : string =
-  request.headers.getOrDefault(key)
+  try:
+    request.headers[key]
+  except KeyError:
+    log "No header found called '", key, "'"
+    ""
