@@ -20,7 +20,7 @@ To use Nest, add an import to it to your code with `import nest`.
 The preferred way to use Nest is with the provided templates: `onPort` and `map`. The `onPort` template takes the port number to server on as an argument, and provides the server to all code under its view. `map` will create a new route from the given path, and use the provided block as the handler. If a second parameter is provided, it is filled with the request context. If a third is provided, it contains a table of the URL parameters.
 
 ```nim
-import nest
+import nest_macros
 
 onPort(8080):
   get("/"):
@@ -38,10 +38,10 @@ import nest
 
 let server = newNestServer()
 
-server.addRoute("/", nest.GET, (proc proc (req: Request, headers : var StringTableRef, pathParams : StringTableRef, queryParams : StringTableRef, modelParams : StringTableRef) : string =
+server.addRoute(nest.GET, "/", (proc (req: Request, headers : var StringTableRef, pathParams : StringTableRef, queryParams : StringTableRef, modelParams : StringTableRef) : string =
   return "this is the root page"
 ))
-server.addRoute("/*/foo", nest.GET, (proc proc (req: Request, headers : var StringTableRef, pathParams : StringTableRef, queryParams : StringTableRef, modelParams : StringTableRef) : string =
+server.addRoute(nest.GET, "/*/foo", (proc (req: Request, headers : var StringTableRef, pathParams : StringTableRef, queryParams : StringTableRef, modelParams : StringTableRef) : string =
   return "this is a leaf page, generated with a wildcard"
 ))
 
