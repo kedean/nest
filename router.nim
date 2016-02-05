@@ -17,7 +17,7 @@ const specialSectionStartChars = {wildcard, startParam}
 const allowedCharsInPattern = allowedCharsInUrl + {wildcard, startParam, endParam}
 
 type
-  RequestHandler* = proc (req: Request, pathParams : StringTableRef, queryParams : StringTableRef, modelParams : StringTableRef) : string {.gcsafe.}
+  RequestHandler* = proc (req: Request, headers : var StringTableRef, pathParams : StringTableRef, queryParams : StringTableRef, modelParams : StringTableRef) : string {.gcsafe.}
 
   MatcherPieceType = enum
     matcherWildcard,
