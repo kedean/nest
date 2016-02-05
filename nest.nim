@@ -61,55 +61,41 @@ const
   PUT* = "put"
   DELETE* = "delete"
 
-template get*(path, actions:untyped) : untyped =
-  server.addRoute(GET, path, proc (request:Request, pathParams:StringTableRef, queryParams:StringTableRef) : string {.gcsafe.} =
+template map*(reqMethod, path, actions:untyped) : untyped =
+  server.addRoute(reqMethod, path, proc (request:Request, pathParams:StringTableRef, queryParams:StringTableRef) : string {.gcsafe.} =
     let request {.inject.} = request
     let pathParams {.inject.} = pathParams
     let queryParams {.inject.} = queryParams
     actions)
+
+template get*(path, actions:untyped) : untyped =
+  map(GET, path, actions)
 
 template post*(path, actions:untyped) : untyped =
-  server.addRoute(POST, path, proc (request:Request, pathParams:StringTableRef, queryParams:StringTableRef) : string {.gcsafe.} =
-    let request {.inject.} = request
-    let pathParams {.inject.} = pathParams
-    let queryParams {.inject.} = queryParams
-    actions)
+  map(POST, path, actions)
 
 template head*(path, actions:untyped) : untyped =
-  server.addRoute(HEAD, path, proc (request:Request, pathParams:StringTableRef, queryParams:StringTableRef) : string {.gcsafe.} =
-    let request {.inject.} = request
-    let pathParams {.inject.} = pathParams
-    let queryParams {.inject.} = queryParams
-    actions)
+  map(HEAD, path, actions)
 
 template options*(path, actions:untyped) : untyped =
-  server.addRoute(OPTIONS, path, proc (request:Request, pathParams:StringTableRef, queryParams:StringTableRef) : string {.gcsafe.} =
-    let request {.inject.} = request
-    let pathParams {.inject.} = pathParams
-    let queryParams {.inject.} = queryParams
-    actions)
+  map(OPTIONS, path, actions)
 
 template put*(path, actions:untyped) : untyped =
-  server.addRoute(PUT, path, proc (request:Request, pathParams:StringTableRef, queryParams:StringTableRef) : string {.gcsafe.} =
-    let request {.inject.} = request
-    let pathParams {.inject.} = pathParams
-    let queryParams {.inject.} = queryParams
-    actions)
+  map(PUT, path, actions)
 
 template delete*(path, actions:untyped) : untyped =
-  server.addRoute(DELETE, path, proc (request:Request, pathParams:StringTableRef, queryParams:StringTableRef) : string {.gcsafe.} =
-    let request {.inject.} = request
-    let pathParams {.inject.} = pathParams
-    let queryParams {.inject.} = queryParams
-    actions)
+  map(DELETE, path, actions)
 
 #
 # Parameter extraction templates
 #
 
 template pathParam*(key : string) : string =
+  ## Safely gets a single parameter from the path, or an empty string if it doesn't exist
   pathParams.getOrDefault(key)
 template queryParam*(key : string) : string =
+  ## Safely gets a single parameter from the query string, or an empty string if it doesn't exist
   queryParams.getOrDefault(key)
 template param*(key : string) : string =
+  ## Safely gets a single parameter from either the path or query string, or an empty string if it doesn't exist. Path parameters take precedence
   (if pathParams.hasKey(key): pathParams[key] elif queryParams.hasKey(key): queryParams[key] else: "")
