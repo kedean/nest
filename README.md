@@ -8,10 +8,10 @@ This is an attempt at creating a framework for REST API's using [Nim](http://nim
 Not at all. Check back soon.
 
 ## Coming soon
-- parameters for form data
+- cookie management
+- content-type routing rules
 - easier way to access request contents
 - documentation!
-- response editing?
 
 ## Usage
 To use Nest, add an import to it to your code with `import nest`.
@@ -23,12 +23,8 @@ The preferred way to use Nest is with the provided templates: `onPort` and `map`
 import nest
 
 onPort(8080):
-  get("/", request, parameters):
+  get("/"):
     return "this is the root page"
-  get("/foo", request):
-    return "this only took the request context"
-  get("/bar"):
-    return "this took no extra arguments"
 ```
 
 Using the templates style means you don't have to worry about keeping track of your server, nor do you need to remember the syntax of a RequestHandler procedure.
@@ -42,10 +38,10 @@ import nest
 
 let server = newNestServer()
 
-server.addRoute("/", nest.GET, (proc (req:Request, params:Params) : string =
+server.addRoute("/", nest.GET, (proc proc (req: Request, headers : var StringTableRef, pathParams : StringTableRef, queryParams : StringTableRef, modelParams : StringTableRef) : string =
   return "this is the root page"
 ))
-server.addRoute("/*/foo", nest.GET, (proc (req:Request, params:Params) : string =
+server.addRoute("/*/foo", nest.GET, (proc proc (req: Request, headers : var StringTableRef, pathParams : StringTableRef, queryParams : StringTableRef, modelParams : StringTableRef) : string =
   return "this is a leaf page, generated with a wildcard"
 ))
 
@@ -55,4 +51,6 @@ server.run(8080)
 ```
 
 ### Accessing parameters
-Named parameters may be specified in mappings with `{paramName}`. The params variable passed to the callback has two properties, `pathParams` and `queryParams`, both of which are implemented with Nim's [strtabs](http://nim-lang.org/docs/strtabs.html) module. It is suggested that you access parameters with `.getOrDefault(key : string)` to avoid exceptions. You may also use `params[key]` to safely get a parameter of either type, or an empty string if it is not found (path parameter take precedence over any conflicting query parameters). See example.nim for more.
+Named parameters may be accessed with the `param(key)` method, or more specifically with `pathParam(key)`, `queryParam(key)`, and `modelParam(key)`.
+
+Headers may be sent and received with `getHeader(key)` and `sendHeader(key, value)`.
