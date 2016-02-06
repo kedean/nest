@@ -1,4 +1,4 @@
-import nest_macros
+import src/nest_macros
 import strutils
 
 onPort(8080):
