@@ -16,15 +16,17 @@ const
 
 type
   NestServer = ref object
-      httpServer: AsyncHttpServer
-      dispatchMethod: proc (req:Request) : Future[void] {.closure, gcsafe.}
-      router: Router
-      logger*: Logger
+    httpServer: AsyncHttpServer
+    dispatchMethod: proc (req:Request) : Future[void] {.closure, gcsafe.}
+    router: Router[RequestHandler]
+    logger*: Logger
+
+  RequestHandler = proc (req: Request, headers : var StringTableRef, pathParams : StringTableRef, queryParams : StringTableRef, modelParams : StringTableRef) : string {.gcsafe.}
 
 const defaultLogFile = "nest.log"
 
 proc newNestServer* (logger : Logger = newRollingFileLogger(defaultLogFile)) : NestServer =
-  let routing = newRouter()
+  let routing = newRouter[RequestHandler]()
   logger.log(lvlInfo, "****** Created server on ", getTime(), " ******")
 
   proc dispatch(req: Request) {.async, gcsafe.} =

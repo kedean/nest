@@ -1,6 +1,7 @@
-import critbits, strutils, parseutils, strtabs, sequtils
+import strutils, parseutils, strtabs, sequtils
 from asynchttpserver import Request
 import logging
+import tables, critbits
 
 #
 #Type Declarations
@@ -14,8 +15,6 @@ const specialSectionStartChars = {wildcard, startParam}
 const allowedCharsInPattern = allowedCharsInUrl + {wildcard, startParam, endParam}
 
 type
-  RequestHandler* = proc (req: Request, headers : var StringTableRef, pathParams : StringTableRef, queryParams : StringTableRef, modelParams : StringTableRef) : string {.gcsafe.}
-
   MatcherPieceType = enum
     matcherWildcard,
     matcherParam,
@@ -26,28 +25,28 @@ type
         value : string
       of matcherWildcard:
         discard
-  PathMatcher = tuple
+  PathMatcher[H] = tuple
     pattern : seq[MatcherPiece]
     headers : StringTableRef
-    handler : RequestHandler
+    handler : H
 
-  MethodRouter = ref object
-    staticPaths : CritBitTree[RequestHandler]
-    pathMatchers : seq[PathMatcher]
+  MethodRouter[H] = ref object
+    staticPaths : CritBitTree[H]
+    pathMatchers : seq[PathMatcher[H]]
 
-  Router* = ref object
-    methodRouters : CritBitTree[MethodRouter]
+  Router*[H] = ref object
+    methodRouters : TableRef[string, MethodRouter[H]]
 
   RoutingError = object of Exception
 
 #
 #Constructor
 #
-proc newRouter*() : Router =
-  return Router(methodRouters : CritBitTree[MethodRouter]())
+proc newRouter*[H]() : Router[H] =
+  return Router[H](methodRouters : newTable[string, MethodRouter[H]]())
 
-proc newMethodRouter() : MethodRouter =
-  return MethodRouter(pathMatchers:newSeq[PathMatcher](), staticPaths:CritBitTree[RequestHandler]())
+proc newMethodRouter[H]() : MethodRouter[H] =
+  return MethodRouter[H](pathMatchers:newSeq[PathMatcher[H]](), staticPaths:CritBitTree[H]())
 
 #
 #Procedures to add routes
@@ -77,7 +76,7 @@ proc generatePatternSequence(pattern : string, startIndex : int = 0) : seq[Match
   else:
     return @[MatcherPiece(kind:matcherText, value:token)]
 
-proc route*(router : Router, reqMethod : string, pattern : string, handler : RequestHandler, reqHeaders : StringTableRef = newStringTable(), logger : Logger = newConsoleLogger()) {.noSideEffect.} =
+proc route*[H](router : Router[H], reqMethod : string, pattern : string, handler : H, reqHeaders : StringTableRef = newStringTable(), logger : Logger = newConsoleLogger()) {.gcsafe.} =
   if(not pattern.allCharsInSet(allowedCharsInPattern)):
     raise newException(RoutingError, "Illegal characters occurred in the routing pattern, please restrict to alphanumerics, or the following: - . _ ~ /")
 
@@ -90,11 +89,11 @@ proc route*(router : Router, reqMethod : string, pattern : string, handler : Req
   if not (pattern[0] == '/'): #ensure each pattern is relative to root
     pattern.insert("/")
 
-  var methodRouter : MethodRouter
+  var methodRouter : MethodRouter[H]
   try:
     methodRouter = router.methodRouters[reqMethod]
   except KeyError:
-    methodRouter = newMethodRouter()
+    methodRouter = newMethodRouter[H]()
     router.methodRouters[reqMethod] = methodRouter
 
   if pattern.allCharsInSet(allowedCharsInUrl): #static cases do not need to be matched against
@@ -114,15 +113,15 @@ type
   PathMatchingResultType* = enum
     pathMatchFound
     pathMatchNotFound
-  PathMatchingResult* = object
+  PathMatchingResult*[H] = object
     case status* : PathMatchingResultType:
       of pathMatchFound:
-        handler* : RequestHandler
+        handler* : H
         pathParams* : StringTableRef
       of pathMatchNotFound:
         discard
 
-proc matchPath(matcher : PathMatcher, path : string, logger : Logger) : PathMatchingResult =
+proc matchPath[H](matcher : PathMatcher[H], path : string, logger : Logger) : PathMatchingResult[H] =
   block checkMatch: #a single run, this can be broken if anything checked doesn't match
     var scanningWildcard, scanningParameter = false
     var parameterBeingScanned : string
@@ -161,21 +160,24 @@ proc matchPath(matcher : PathMatcher, path : string, logger : Logger) : PathMatc
           parameterBeingScanned = piece.value
 
     if not scanningWildcard and not scanningParameter:
-      return PathMatchingResult(status:pathMatchFound, handler:matcher.handler, pathParams:pathParams)
+      return PathMatchingResult[H](status:pathMatchFound, handler:matcher.handler, pathParams:pathParams)
 
-  return PathMatchingResult(status:pathMatchNotFound)
+  return PathMatchingResult[H](status:pathMatchNotFound)
 
-proc match*(router : Router, reqMethod : string, path : string, logger : Logger = newConsoleLogger()) : PathMatchingResult {.noSideEffect.} =
+proc matchHeaders[H](matcher : PathMatcher[H], path : string, logger : Logger) : PathMatchingResult =
+  discard
+
+proc match*[H](router : Router[H], reqMethod : string, path : string, logger : Logger = newConsoleLogger()) : PathMatchingResult[H] {.noSideEffect.} =
   let reqMethod = reqMethod.toLower()
 
-  if router.methodRouters.contains(reqMethod):
+  if router.methodRouters.hasKey(reqMethod):
     let methodRouter = router.methodRouters[reqMethod]
     var path = path
     if path != "/": #the root string is special
       path.removeSuffix('/') #trailing slashes are considered redundant
 
-    if methodRouter.staticPaths.contains(path): #basic url, see if its in the list on its own first, guaranteed no conflicts with matcher characters
-      return PathMatchingResult(status:pathMatchFound, handler: methodRouter.staticPaths[path], pathParams:newStringTable())
+    if methodRouter.staticPaths.hasKey(path): #basic url, see if its in the list on its own first, guaranteed no conflicts with matcher characters
+      return PathMatchingResult[H](status:pathMatchFound, handler: methodRouter.staticPaths[path], pathParams:newStringTable())
     else: #check for a match
       for matcher in methodRouter.pathMatchers: # TODO: could this be sped up by using a CritBitTree and pairsWithPrefix?
         let matchingResult = matcher.matchPath(path, logger)
@@ -185,4 +187,4 @@ proc match*(router : Router, reqMethod : string, path : string, logger : Logger 
           of pathMatchNotFound:
             continue
 
-      return PathMatchingResult(status:pathMatchNotFound)
+      return PathMatchingResult[H](status:pathMatchNotFound)
