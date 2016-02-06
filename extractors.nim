@@ -30,4 +30,4 @@ proc extractFormBody*(body : string, contentType : string) : StringTableRef {.gc
   elif contentType.startsWith(FORM_MULTIPART_DATA):
     assert(false, "Multipart form data not yet supported")
   else:
-    return StringTableRef()
+    return newStringTable()

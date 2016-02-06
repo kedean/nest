@@ -25,7 +25,7 @@ const defaultLogFile = "nest.log"
 
 proc newNestServer* (logger : Logger = newRollingFileLogger(defaultLogFile)) : NestServer =
   let routing = newRouter()
-  nest.logger.log(lvlInfo, "****** Created server on ", getTime(), " ******")
+  logger.log(lvlInfo, "****** Created server on ", getTime(), " ******")
 
   proc dispatch(req: Request) {.async, gcsafe.} =
     var
@@ -37,18 +37,19 @@ proc newNestServer* (logger : Logger = newRollingFileLogger(defaultLogFile)) : N
       let requestMethod = req.reqMethod
       let requestPath = req.url.path
       let queryString = req.url.query
-      let (handler, pathParams) = routing.match(requestMethod, requestPath)
-      let queryParams = queryString.extractQueryParams()
-      let modelParams = req.body.extractFormBody(req.headers.getOrDefault("Content-Type"))
+      let matchResult = routing.match(requestMethod, requestPath)
 
-      if handler == nil:
-        let fullPath = requestPath & (if queryString.len() > 0: "?" & queryString else: "")
-        logger.log(lvlError, "No mapping found for path '", fullPath, "' with method '", requestMethod, "'")
-        statusCode = Http404
-        content = "Page not found"
-      else:
-        statusCode = Http200
-        content = handler(req, headers, pathParams, queryParams, modelParams)
+      case matchResult.status:
+        of pathMatchNotFound:
+          let fullPath = requestPath & (if queryString.len() > 0: "?" & queryString else: "")
+          logger.log(lvlError, "No mapping found for path '", fullPath, "' with method '", requestMethod, "'")
+          statusCode = Http404
+          content = "Page not found"
+        of pathMatchFound:
+          let queryParams = queryString.extractQueryParams()
+          let modelParams = req.body.extractFormBody(req.headers.getOrDefault("Content-Type"))
+          statusCode = Http200
+          content = matchResult.handler(req, headers, matchResult.pathParams, queryParams, modelParams)
     except:
       logger.log(lvlError, "Internal error occured:\n\t", getCurrentExceptionMsg())
       statusCode = Http500
@@ -67,5 +68,5 @@ proc run*(nest : NestServer, portNum : int) =
   nest.logger.log(lvlInfo, "****** Started server on ", getTime(), " ******")
   waitFor nest.httpServer.serve(Port(portNum), nest.dispatchMethod)
 
-proc addRoute*(nest : NestServer, reqMethod : string, reqPath : string, handler : RequestHandler) =
-  nest.router.route(reqMethod, reqPath, handler, nest.logger)
+proc addRoute*(nest : NestServer, reqMethod : string, reqPath : string, handler : RequestHandler, reqHeaders : StringTableRef  = newStringTable()) =
+  nest.router.route(reqMethod, reqPath, handler, reqHeaders, nest.logger)
