@@ -27,7 +27,7 @@ type
         discard
   PathMatcher[H] = tuple
     pattern : seq[MatcherPiece]
-    headers : StringTableRef
+    headers : TableRef[string, seq[MatcherPiece]]
     handler : H
 
   MethodRouter[H] = ref object
@@ -76,7 +76,7 @@ proc generatePatternSequence(pattern : string, startIndex : int = 0) : seq[Match
   else:
     return @[MatcherPiece(kind:matcherText, value:token)]
 
-proc route*[H](router : Router[H], reqMethod : string, pattern : string, handler : H, reqHeaders : StringTableRef = newStringTable(), logger : Logger = newConsoleLogger()) {.gcsafe.} =
+proc route*[H](router : Router[H], reqMethod : string, pattern : string, reqHeaders : StringTableRef, handler : H, logger : Logger = newConsoleLogger()) {.gcsafe.} =
   if(not pattern.allCharsInSet(allowedCharsInPattern)):
     raise newException(RoutingError, "Illegal characters occurred in the routing pattern, please restrict to alphanumerics, or the following: - . _ ~ /")
 
@@ -96,10 +96,15 @@ proc route*[H](router : Router[H], reqMethod : string, pattern : string, handler
     methodRouter = newMethodRouter[H]()
     router.methodRouters[reqMethod] = methodRouter
 
+  var headers = newTable[string, seq[MatcherPiece]]()
+  if reqHeaders != nil:
+    for key, value in reqHeaders:
+      headers[key] = generatePatternSequence(value)
+
   if pattern.allCharsInSet(allowedCharsInUrl): #static cases do not need to be matched against
     methodRouter.staticPaths[pattern] = handler
   else:
-    methodRouter.pathMatchers.add((pattern:generatePatternSequence(pattern), headers: reqHeaders, handler:handler))
+    methodRouter.pathMatchers.add((pattern:generatePatternSequence(pattern), headers: headers, handler:handler))
 
   #TODO: ensure the path does not conflict with an existing one
   logger.log(lvlInfo, "Created ", reqMethod, " mapping for '", pattern, "'")
@@ -121,14 +126,14 @@ type
       of pathMatchNotFound:
         discard
 
-proc matchPath[H](matcher : PathMatcher[H], path : string, logger : Logger) : PathMatchingResult[H] =
+proc matchPattern(pattern : seq[MatcherPiece], path : string) : PathMatchingResult[void] =
   block checkMatch: #a single run, this can be broken if anything checked doesn't match
     var scanningWildcard, scanningParameter = false
     var parameterBeingScanned : string
     var pathIndex = 0
     var pathParams = newStringTable()
 
-    for piece in matcher.pattern:
+    for piece in pattern:
       case piece.kind:
         of matcherText:
           if scanningWildcard or scanningParameter:
@@ -160,14 +165,31 @@ proc matchPath[H](matcher : PathMatcher[H], path : string, logger : Logger) : Pa
           parameterBeingScanned = piece.value
 
     if not scanningWildcard and not scanningParameter:
-      return PathMatchingResult[H](status:pathMatchFound, handler:matcher.handler, pathParams:pathParams)
+      return PathMatchingResult[void](status:pathMatchFound, pathParams:pathParams)
 
-  return PathMatchingResult[H](status:pathMatchNotFound)
+  return PathMatchingResult[void](status:pathMatchNotFound)
 
-proc matchHeaders[H](matcher : PathMatcher[H], path : string, logger : Logger) : PathMatchingResult =
-  discard
+proc matchPath[H](matcher : PathMatcher[H], path : string, logger : Logger) : PathMatchingResult[H] =
+  let result = matchPattern(matcher.pattern, path)
+  case result.status:
+    of pathMatchFound:
+      return PathMatchingResult[H](status:pathMatchFound, handler:matcher.handler, pathParams:result.pathParams)
+    of pathMatchNotFound:
+      return PathMatchingResult[H](status:pathMatchNotFound)
 
-proc match*[H](router : Router[H], reqMethod : string, path : string, logger : Logger = newConsoleLogger()) : PathMatchingResult[H] {.noSideEffect.} =
+
+proc matchHeaders(matcher : PathMatcher, headers : StringTableRef, logger : Logger) : PathMatchingResult[void] =
+  if (headers == nil or headers.len() == 0) and matcher.headers.len() == 0: #if all of the inputs are empty, no need to check them over
+    return PathMatchingResult[void](status:pathMatchFound)
+
+  for key, value in matcher.headers.pairs():
+    let result = matchPattern(value, headers.getOrDefault(key))
+    if result.status == pathMatchNotFound:
+      logger.log(lvlError, "Could not match header called '", key, "' in request")
+      return PathMatchingResult[void](status:pathMatchNotFound)
+  return PathMatchingResult[void](status:pathMatchFound)
+
+proc match*[H](router : Router[H], reqMethod : string, reqHeaders : StringTableRef, path : string, logger : Logger = newConsoleLogger()) : PathMatchingResult[H] {.noSideEffect.} =
   let reqMethod = reqMethod.toLower()
 
   if router.methodRouters.hasKey(reqMethod):
@@ -180,11 +202,10 @@ proc match*[H](router : Router[H], reqMethod : string, path : string, logger : L
       return PathMatchingResult[H](status:pathMatchFound, handler: methodRouter.staticPaths[path], pathParams:newStringTable())
     else: #check for a match
       for matcher in methodRouter.pathMatchers: # TODO: could this be sped up by using a CritBitTree and pairsWithPrefix?
-        let matchingResult = matcher.matchPath(path, logger)
-        case matchingResult.status:
-          of pathMatchFound:
-            return matchingResult
-          of pathMatchNotFound:
-            continue
+        let pathResult = matcher.matchPath(path, logger)
+        if pathResult.status == pathMatchFound:
+          let headerResult = matcher.matchHeaders(reqHeaders, logger)
+          if headerResult.status == pathMatchFound:
+            return pathResult
 
       return PathMatchingResult[H](status:pathMatchNotFound)

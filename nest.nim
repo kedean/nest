@@ -39,7 +39,8 @@ proc newNestServer* (logger : Logger = newRollingFileLogger(defaultLogFile)) : N
       let requestMethod = req.reqMethod
       let requestPath = req.url.path
       let queryString = req.url.query
-      let matchResult = routing.match(requestMethod, requestPath)
+      let requestHeaders = req.headers
+      let matchResult = routing.match(requestMethod, requestHeaders, requestPath, logger)
 
       case matchResult.status:
         of pathMatchNotFound:
@@ -70,5 +71,5 @@ proc run*(nest : NestServer, portNum : int) =
   nest.logger.log(lvlInfo, "****** Started server on ", getTime(), " ******")
   waitFor nest.httpServer.serve(Port(portNum), nest.dispatchMethod)
 
-proc addRoute*(nest : NestServer, reqMethod : string, reqPath : string, handler : RequestHandler, reqHeaders : StringTableRef  = newStringTable()) =
-  nest.router.route(reqMethod, reqPath, handler, reqHeaders, nest.logger)
+proc addRoute*(nest : NestServer, reqMethod : string, reqPath : string, reqHeaders : StringTableRef, handler : RequestHandler) =
+  nest.router.route(reqMethod, reqPath, reqHeaders, handler, nest.logger)
