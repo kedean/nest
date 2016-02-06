@@ -1,4 +1,4 @@
-import nest, logging
+import nest, logging, strtabs
 export nest
 
 template onPort*(portNum, actions: untyped): untyped =
@@ -15,7 +15,7 @@ template onPort*(portNum, actions: untyped): untyped =
 #
 
 template map*(reqMethod, path, actions:untyped) : untyped =
-  server.addRoute(reqMethod, path, proc (request:Request, responseHeaders : var StringTableRef, pathParams:StringTableRef, queryParams:StringTableRef, modelParams:StringTableRef) : string {.gcsafe.} =
+  server.addRoute(reqMethod, path, nil, proc (request:Request, responseHeaders : var StringTableRef, pathParams:StringTableRef, queryParams:StringTableRef, modelParams:StringTableRef) : string {.gcsafe.} =
     let request {.inject.} = request
     let responseHeaders {.inject.} = responseHeaders
     let pathParams {.inject.} = pathParams
