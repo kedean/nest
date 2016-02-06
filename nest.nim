@@ -1,7 +1,8 @@
 import asynchttpserver, asyncdispatch
 import router, extractors
-import tables
-import strtabs
+import tables, strtabs
+import logging
+import times
 
 export Request, tables, strtabs
 
@@ -12,15 +13,19 @@ const
   OPTIONS* = "options"
   PUT* = "put"
   DELETE* = "delete"
-  
+
 type
   NestServer = ref object
       httpServer: AsyncHttpServer
       dispatchMethod: proc (req:Request) : Future[void] {.closure, gcsafe.}
       router: Router
+      logger*: Logger
 
-proc newNestServer* () : NestServer =
+const defaultLogFile = "nest.log"
+
+proc newNestServer* (logger : Logger = newRollingFileLogger(defaultLogFile)) : NestServer =
   let routing = newRouter()
+  nest.logger.log(lvlInfo, "****** Created server on ", getTime(), " ******")
 
   proc dispatch(req: Request) {.async, gcsafe.} =
     var
@@ -38,27 +43,29 @@ proc newNestServer* () : NestServer =
 
       if handler == nil:
         let fullPath = requestPath & (if queryString.len() > 0: "?" & queryString else: "")
-        echo "No mapping found for path '", fullPath, "' with method '", requestMethod, "'"
+        logger.log(lvlError, "No mapping found for path '", fullPath, "' with method '", requestMethod, "'")
         statusCode = Http404
         content = "Page not found"
       else:
         statusCode = Http200
         content = handler(req, headers, pathParams, queryParams, modelParams)
     except:
+      logger.log(lvlError, "Internal error occured:\n\t", getCurrentExceptionMsg())
       statusCode = Http500
-      content = "Server error"
-      #TODO: Log the error
+      content = "Internal server error"
 
     await req.respond(statusCode, content, headers)
 
   return NestServer(
     httpServer: newAsyncHttpServer(),
     dispatchMethod: dispatch,
-    router: routing
+    router: routing,
+    logger: logger
     )
 
 proc run*(nest : NestServer, portNum : int) =
+  nest.logger.log(lvlInfo, "****** Started server on ", getTime(), " ******")
   waitFor nest.httpServer.serve(Port(portNum), nest.dispatchMethod)
 
-proc addRoute*(nest : NestServer, requestMethod : string, requestPath : string, handler : RequestHandler) =
-  nest.router.route(requestMethod, requestPath, handler)
+proc addRoute*(nest : NestServer, reqMethod : string, reqPath : string, handler : RequestHandler) =
+  nest.router.route(reqMethod, reqPath, handler, nest.logger)

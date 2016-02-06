@@ -1,9 +1,6 @@
-import critbits
-import strutils
-import parseutils
-import sequtils
-import strtabs
+import critbits, strutils, parseutils, strtabs, sequtils
 from asynchttpserver import Request
+import logging
 
 #
 #Type Declarations
@@ -40,6 +37,8 @@ type
   Router* = ref object
     methodRouters : CritBitTree[MethodRouter]
 
+  RoutingError = object of Exception
+
 #
 #Constructor
 #
@@ -52,7 +51,7 @@ proc newMethodRouter() : MethodRouter =
 #
 #Procedures to add routes
 #
-proc generatePatternSequence(pattern : string, startIndex : int = 0) : seq[MatcherPiece] {.noSideEffect.} =
+proc generatePatternSequence(pattern : string, startIndex : int = 0) : seq[MatcherPiece] {.noSideEffect, raises: [RoutingError].} =
   var token : string
   let tokenSize = pattern.parseUntil(token, specialSectionStartChars, startIndex)
   var newStartIndex = startIndex + tokenSize
@@ -71,14 +70,16 @@ proc generatePatternSequence(pattern : string, startIndex : int = 0) : seq[Match
       newStartIndex += (paramNameSize + 1)
       scanner = MatcherPiece(kind:matcherParam, value:paramName)
     else:
-      doAssert(false, "Unrecognized special character") #TODO: handle this better?
+      raise newException(RoutingError, "Unrecognized special character")
 
     return concat(@[MatcherPiece(kind:matcherText, value:token), scanner], generatePatternSequence(pattern, newStartIndex))
   else:
     return @[MatcherPiece(kind:matcherText, value:token)]
 
-proc route*(router : Router, reqMethod : string, pattern : string, handler : RequestHandler) {.gcsafe.} =
-  doAssert(pattern.allCharsInSet(allowedCharsInPattern))
+proc route*(router : Router, reqMethod : string, pattern : string, handler : RequestHandler, logger : Logger = newConsoleLogger()) {.noSideEffect.} =
+  if(not pattern.allCharsInSet(allowedCharsInPattern)):
+    raise newException(RoutingError, "Illegal characters occurred in the routing pattern, please restrict to alphanumerics, or the following: - . _ ~ /")
+
   let reqMethod = reqMethod.toLower()
 
   #if a url ends in a forward slash, we discard it and consider the matcher the same as without it
@@ -88,8 +89,12 @@ proc route*(router : Router, reqMethod : string, pattern : string, handler : Req
   if not (pattern[0] == '/'): #ensure each pattern is relative to root
     pattern.insert("/")
 
-  discard router.methodRouters.containsOrIncl(reqMethod, newMethodRouter()) #guarantee the method has a set of mappings
-  let methodRouter = router.methodRouters[reqMethod]
+  var methodRouter : MethodRouter
+  try:
+    methodRouter = router.methodRouters[reqMethod]
+  except KeyError:
+    methodRouter = newMethodRouter()
+    router.methodRouters[reqMethod] = methodRouter
 
   if pattern.allCharsInSet(allowedCharsInUrl): #static cases do not need to be matched against
     methodRouter.staticPaths[pattern] = handler
@@ -97,13 +102,14 @@ proc route*(router : Router, reqMethod : string, pattern : string, handler : Req
     methodRouter.pathMatchers.add((pattern:generatePatternSequence(pattern), handler:handler))
 
   #TODO: ensure the path does not conflict with an existing one
-  echo "Created ", reqMethod, " mapping for '", pattern, "'"
+  logger.log(lvlInfo, "Created ", reqMethod, " mapping for '", pattern, "'")
+
 
 #
 # Procedures to match against paths
 #
 
-proc match*(router : Router, reqMethod : string, path : string) : tuple[handler : RequestHandler, pathParams : StringTableRef] {.noSideEffect.} =
+proc match*(router : Router, reqMethod : string, path : string, logger : Logger = newConsoleLogger()) : tuple[handler : RequestHandler, pathParams : StringTableRef] {.noSideEffect.} =
   let reqMethod = reqMethod.toLower()
 
   if router.methodRouters.contains(reqMethod):
@@ -115,7 +121,7 @@ proc match*(router : Router, reqMethod : string, path : string) : tuple[handler 
     if methodRouter.staticPaths.contains(path): #basic url, see if its in the list on its own first, guaranteed no conflicts with matcher characters
       return (handler: methodRouter.staticPaths[path], pathParams:newStringTable())
     else: #check for a match
-      for matcher in methodRouter.pathMatchers:
+      for matcher in methodRouter.pathMatchers: # TODO: could this be sped up by using a CritBitTree and pairsWithPrefix?
         block checkMatch: #a single run, this can be broken if anything checked doesn't match
           var scanningWildcard, scanningParameter = false
           var parameterBeingScanned : string
