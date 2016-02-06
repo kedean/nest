@@ -1,5 +1,6 @@
 import critbits, strutils, parseutils, strtabs, sequtils
 from asynchttpserver import Request
+import logging
 
 #
 #Type Declarations
@@ -75,7 +76,7 @@ proc generatePatternSequence(pattern : string, startIndex : int = 0) : seq[Match
   else:
     return @[MatcherPiece(kind:matcherText, value:token)]
 
-proc route*(router : Router, reqMethod : string, pattern : string, handler : RequestHandler) {.noSideEffect, raises: [RoutingError].} =
+proc route*(router : Router, reqMethod : string, pattern : string, handler : RequestHandler, logger : Logger = newConsoleLogger()) {.noSideEffect.} =
   if(not pattern.allCharsInSet(allowedCharsInPattern)):
     raise newException(RoutingError, "Illegal characters occurred in the routing pattern, please restrict to alphanumerics, or the following: - . _ ~ /")
 
@@ -88,7 +89,6 @@ proc route*(router : Router, reqMethod : string, pattern : string, handler : Req
   if not (pattern[0] == '/'): #ensure each pattern is relative to root
     pattern.insert("/")
 
-  discard router.methodRouters.containsOrIncl(reqMethod, newMethodRouter()) #guarantee the method has a set of mappings
   var methodRouter : MethodRouter
   try:
     methodRouter = router.methodRouters[reqMethod]
@@ -102,12 +102,14 @@ proc route*(router : Router, reqMethod : string, pattern : string, handler : Req
     methodRouter.pathMatchers.add((pattern:generatePatternSequence(pattern), handler:handler))
 
   #TODO: ensure the path does not conflict with an existing one
+  logger.log(lvlInfo, "Created ", reqMethod, " mapping for '", pattern, "'")
+
 
 #
 # Procedures to match against paths
 #
 
-proc match*(router : Router, reqMethod : string, path : string) : tuple[handler : RequestHandler, pathParams : StringTableRef] {.noSideEffect.} =
+proc match*(router : Router, reqMethod : string, path : string, logger : Logger = newConsoleLogger()) : tuple[handler : RequestHandler, pathParams : StringTableRef] {.noSideEffect.} =
   let reqMethod = reqMethod.toLower()
 
   if router.methodRouters.contains(reqMethod):
@@ -119,7 +121,7 @@ proc match*(router : Router, reqMethod : string, path : string) : tuple[handler 
     if methodRouter.staticPaths.contains(path): #basic url, see if its in the list on its own first, guaranteed no conflicts with matcher characters
       return (handler: methodRouter.staticPaths[path], pathParams:newStringTable())
     else: #check for a match
-      for matcher in methodRouter.pathMatchers:
+      for matcher in methodRouter.pathMatchers: # TODO: could this be sped up by using a CritBitTree and pairsWithPrefix?
         block checkMatch: #a single run, this can be broken if anything checked doesn't match
           var scanningWildcard, scanningParameter = false
           var parameterBeingScanned : string

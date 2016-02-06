@@ -1,4 +1,4 @@
-import nest, logger
+import nest, logging
 export nest
 
 template onPort*(portNum, actions: untyped): untyped =
@@ -50,21 +50,21 @@ template pathParam*(key : string) : string =
   try:
     pathParams[key]
   except:
-    log "No path parameter found called '", key, "'"
+    server.logger.log(lvlError, "No path parameter found called '", key, "'")
     ""
 template queryParam*(key : string) : string =
   ## Safely gets a single parameter from the query string, or an empty string if it doesn't exist
   try:
     queryParams[key]
   except:
-    log "No query parameter found called '", key, "'"
+    server.logger.log(lvlError, "No query parameter found called '", key, "'")
     ""
 template modelParam*(key : string) : string =
   ## Safely gets a single parameter from the model, or an empty string if it doesn't exist
   try:
     modelParams[key]
   except:
-    log "No model parameter found called '", key, "'"
+    server.logger.log(lvlError, "No model parameter found called '", key, "'")
     ""
 template param*(key : string) : string =
   ## Safely gets a single parameter from the path, query string, or model, or an empty string if it doesn't exist. Path parameters take precedence, followed by query string parameters
@@ -81,5 +81,5 @@ template getHeader*(key : string) : string =
   try:
     request.headers[key]
   except KeyError:
-    log "No header found called '", key, "'"
+    server.logger.log(lvlError, "No header found called '", key, "'")
     ""
