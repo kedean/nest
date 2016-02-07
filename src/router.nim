@@ -7,11 +7,12 @@ from asynchttpserver import Request, HttpCode
 #Type Declarations
 #
 
-const allowedCharsInUrl = {'a'..'z', 'A'..'Z', '0'..'9', '-', '.', '_', '~', '/'}
+const pathSeparator = '/'
+const allowedCharsInUrl = {'a'..'z', 'A'..'Z', '0'..'9', '-', '.', '_', '~', pathSeparator}
 const wildcard = '*'
 const startParam = '{'
 const endParam = '}'
-const specialSectionStartChars = {wildcard, startParam}
+const specialSectionStartChars = {pathSeparator, wildcard, startParam}
 const allowedCharsInPattern = allowedCharsInUrl + {wildcard, startParam, endParam}
 
 type
@@ -29,23 +30,56 @@ type
     POST = "post"
     DELETE = "delete"
 
-  MatcherPieceType = enum
-    matcherWildcard,
-    matcherParam,
-    matcherText
-  MatcherPiece = object
-    case kind : MatcherPieceType:
-      of matcherParam, matcherText:
+  # Structures for preparsing mappings
+  PatternMatchingType = enum
+    ptrnWildcard
+    ptrnParam
+    ptrnText
+    ptrnStartHeaderConstraint
+    ptrnEndHeaderConstraint
+  PatternKnot = object
+    case kind : PatternMatchingType:
+      of ptrnParam, ptrnText:
         value : string
-      of matcherWildcard:
+      of ptrnWildcard, ptrnEndHeaderConstraint:
         discard
-  PathMatcher = tuple
-    pattern : seq[MatcherPiece]
-    headers : CritBitTree[seq[MatcherPiece]]
+      of ptrnStartHeaderConstraint:
+        headerName : string
+  PatternRope = tuple
+    pattern : seq[PatternKnot]
     handler : RequestHandler
 
+  # Structures for holding fully parsed mappings
+  PatternNode = ref object
+    case kind : PatternMatchingType: # TODO: should be able to extend PatternKnot to get this, compiled wont let me, investigate further
+      of ptrnParam, ptrnText:
+        value : string
+      of ptrnWildcard, ptrnEndHeaderConstraint:
+        discard
+      of ptrnStartHeaderConstraint:
+        headerName : string
+    case isLeaf : bool: #a leaf node is one with no children
+      of true:
+        discard
+      of false:
+        children : seq[PatternNode]
+    case isTerminator : bool: # a terminator is a node that can be considered a mapping on its own, matching could stop at this node or continue. If it is not a terminator, matching can only continue
+      of true:
+        handler : RequestHandler
+      of false:
+        discard
+
+  # Router Structures
+
+  MethodRouterType = enum # we can either use rope routes or tree routers (spawned from ropes), which are more efficient
+    routeByRope
+    routeByTree
   MethodRouter = ref object
-    matchers : seq[PathMatcher]
+    case kind : MethodRouterType:
+      of routeByRope:
+        ropes : seq[PatternRope]
+      of routeByTree:
+        tree : PatternNode
 
   Router* = ref object
     methodRouters : CritBitTree[MethodRouter]
@@ -74,6 +108,27 @@ type
     content : string
 
 #
+# Stringification
+#
+proc `$`(piece : PatternKnot) : string =
+  case piece.kind:
+    of ptrnParam, ptrnText:
+      result = $(piece.kind) & ":" & piece.value
+    of ptrnWildcard, ptrnEndHeaderConstraint:
+      result = $(piece.kind)
+    of ptrnStartHeaderConstraint:
+      result = $(piece.kind) & ":" & piece.headerName
+proc `$`(node : PatternNode) : string =
+  case node.kind:
+    of ptrnParam, ptrnText:
+      result = $(node.kind) & ":value=" & node.value & ", "
+    of ptrnWildcard, ptrnEndHeaderConstraint:
+      result = $(node.kind) & ":"
+    of ptrnStartHeaderConstraint:
+      result = $(node.kind) & ":" & node.headerName & ", "
+  result = result & "leaf=" & $node.isLeaf & ", terminator=" & $node.isTerminator
+
+#
 # Constructors
 #
 proc newRouter*(logger : Logger = newConsoleLogger()) : Router =
@@ -83,14 +138,22 @@ proc newRouter*(logger : Logger = newConsoleLogger()) : Router =
   )
 
 #
-# Procedures to add mappings
+# Procedures to add initial mappings
 #
+proc emptyKnotSequence(
+  knotSeq : seq[PatternKnot]
+) : bool {.noSideEffect.} =
+  ##
+  ## A knot sequence is empty if it A) contains no elements or B) it contains a single text element with no value
+  ##
+  result = len(knotSeq) == 0 or (len(knotSeq) == 1 and knotSeq[0].kind == ptrnText and knotSeq[0].value == "")
+
 proc generatePatternSequence(
   pattern : string,
   startIndex : int = 0
-) : seq[MatcherPiece] {.noSideEffect, raises: [RoutingError].} =
+) : seq[PatternKnot] {.noSideEffect, raises: [RoutingError].} =
   ##
-  ## Translates the string form of a pattern into a sequence of MatcherPiece objects to be parsed against
+  ## Translates the string form of a pattern into a sequence of PatternKnot objects to be parsed against
   ##
   var token : string
   let tokenSize = pattern.parseUntil(token, specialSectionStartChars, startIndex)
@@ -100,21 +163,35 @@ proc generatePatternSequence(
     let specialChar = pattern[newStartIndex]
     newStartIndex += 1
 
-    var scanner : MatcherPiece
+    var scanner : PatternKnot
 
     if specialChar == wildcard:
-      scanner = MatcherPiece(kind:matcherWildcard)
+      scanner = PatternKnot(kind:ptrnWildcard)
     elif specialChar == startParam:
       var paramName : string
       let paramNameSize = pattern.parseUntil(paramName, endParam, newStartIndex)
       newStartIndex += (paramNameSize + 1)
-      scanner = MatcherPiece(kind:matcherParam, value:paramName)
+      scanner = PatternKnot(kind:ptrnParam, value:paramName)
+    elif specialChar == pathSeparator:
+      scanner = PatternKnot(kind:ptrnText, value:($pathSeparator))
     else:
       raise newException(RoutingError, "Unrecognized special character")
 
-    return concat(@[MatcherPiece(kind:matcherText, value:token), scanner], generatePatternSequence(pattern, newStartIndex))
+    var prefix : seq[PatternKnot]
+    if tokenSize > 0:
+      prefix = @[PatternKnot(kind:ptrnText, value:token),   scanner]
+    else:
+      prefix = @[scanner]
+
+    let suffix = generatePatternSequence(pattern, newStartIndex)
+
+    if emptyKnotSequence(suffix):
+      return prefix
+    else:
+      return concat(prefix, suffix)
+
   else: #no more wildcards or parameter defs, the rest is static text
-    return @[MatcherPiece(kind:matcherText, value:token)]
+    return @[PatternKnot(kind:ptrnText, value:token)]
 
 proc map*(
   router : Router,
@@ -141,21 +218,24 @@ proc map*(
   try:
     methodRouter = router.methodRouters[$verb]
   except KeyError:
-    methodRouter = MethodRouter(matchers:newSeq[PathMatcher]())
+    methodRouter = MethodRouter(kind:routeByRope, ropes:newSeq[PatternRope]())
     router.methodRouters[$verb] = methodRouter
 
-  var matcherHeaders = CritBitTree[seq[MatcherPiece]]()
+  var rope = generatePatternSequence(pattern)
+
   if headers != nil:
     for key, value in headers:
-      matcherHeaders[key] = generatePatternSequence(value)
+      rope.add(PatternKnot(kind:ptrnStartHeaderConstraint, headerName:key))
+      rope = concat(rope, generatePatternSequence(value))
+      rope.add(PatternKnot(kind:ptrnEndHeaderConstraint))
 
-  methodRouter.matchers.add((pattern:generatePatternSequence(pattern), headers: matcherHeaders, handler:handler))
+  methodRouter.ropes.add((pattern:rope, handler:handler))
 
   #TODO: ensure the path does not conflict with an existing one
   router.logger.log(lvlInfo, "Created ", $verb, " mapping for '", pattern, "'")
 
 #
-# Data extractors
+# Data extractors and utilities
 #
 
 proc extractEncodedParams(input : string) : StringTableRef {.noSideEffect.} =
@@ -208,82 +288,187 @@ proc getErrorContent(verb : HttpCode, request : Request, logger : Logger) : stri
     logger.log(lvlError, "Internal server error occurred")
 
 #
+# Compression routines, compression makes matching more efficient, and it must be done before routing
+#
+
+proc knotToNode(rope : PatternRope, index : int, isLeaf : bool, isTerminator : bool) : PatternNode {.noSideEffect.} =
+  let knot = rope.pattern[index]
+
+  case knot.kind:
+    of ptrnText, ptrnParam:
+      if isTerminator:
+        result = PatternNode(kind: knot.kind, value: knot.value, isLeaf: isLeaf, isTerminator: true, handler: rope.handler)
+      else:
+        result = PatternNode(kind: knot.kind, value: knot.value, isLeaf: isLeaf, isTerminator: false)
+    of ptrnWildcard, ptrnEndHeaderConstraint:
+      if isTerminator:
+        result = PatternNode(kind: knot.kind, isLeaf: isLeaf, isTerminator: true, handler: rope.handler)
+      else:
+        result = PatternNode(kind: knot.kind, isLeaf: isLeaf, isTerminator: false)
+    of ptrnStartHeaderConstraint:
+      if isTerminator:
+        result = PatternNode(kind: knot.kind, headerName: knot.headerName, isLeaf: isLeaf, isTerminator: true, handler: rope.handler)
+      else:
+        result = PatternNode(kind: knot.kind, headerName: knot.headerName, isLeaf: isLeaf, isTerminator: false)
+
+
+proc group(matchers : seq[PatternRope], prefixCriteria : string = $(@[PatternKnot(kind:ptrnText, value:($pathSeparator))]), knotIndex : int = 0) : PatternNode {.gcsafe.} =
+  ##
+  ## Create a node containing each knot that has the given criteria at the given knot index
+  ##
+
+  var critMatchIndices = newSeq[int]() # each entry indicates which element of matchers was matched with the criteria
+
+  for matcherIndex, matcher in matchers.pairs():
+    if len(matcher.pattern) > knotIndex: #we can only check this index of the matching sequence if its within the boundaries!
+      let subseq = matcher.pattern[0..knotIndex]
+      if $subseq == prefixCriteria:
+        critMatchIndices.add(matcherIndex)
+
+  case len(critMatchIndices):
+    of 0: # should never happen
+      raise newException(RoutingError, "Invalid grouping state reached")
+    of 1:
+      let pattern = matchers[critMatchIndices[0]].pattern
+
+      if len(pattern) - 1 == knotIndex: #this is the last knot in the rope
+        result = knotToNode(rope = matchers[critMatchIndices[0]], index = knotIndex, isLeaf = true, isTerminator = true)
+      else: #keep going!
+        result = knotToNode(
+          rope = matchers[critMatchIndices[0]],
+          index = knotIndex,
+          isLeaf = false,
+          isTerminator = false
+        )
+
+        result.children = @[matchers.group($pattern[0..knotIndex+1], knotIndex + 1)]
+
+    else:
+      var terminatorRope : PatternRope
+      var terminatorRopeFound = false
+      var knotsChecked = newSeq[string]()
+      var children = newSeq[PatternNode]()
+
+      for matcherIndex in critMatchIndices:
+        let pattern = matchers[matcherIndex].pattern
+
+        if len(pattern) - 1 == knotIndex: #last node in the given sequence, this can only happen up to one time per critMatchIndices set
+          assert terminatorRopeFound == false
+          terminatorRope = matchers[matcherIndex]
+          terminatorRopeFound = true
+        else:
+          let nextKnot = $pattern[knotIndex+1]
+          if not knotsChecked.contains(nextKnot): #only have to do this one time
+            knotsChecked.add(nextKnot)
+            children.add(matchers.group($(pattern[0..knotIndex+1]), knotIndex + 1))
+
+      if terminatorRopeFound:
+        result = knotToNode(rope = terminatorRope, index = knotIndex, isLeaf = false, isTerminator = true)
+      else:
+        result = knotToNode(
+          rope = matchers[critMatchIndices[0]], #does not matter which one we choose, ever matcher indicated by critMatchIndices should be identical if its not a terminator
+          index = knotIndex,
+          isLeaf = false,
+          isTerminator = false
+        )
+
+      result.children = children
+
+proc compress*(router : Router) {.gcsafe.} =
+  for key, methodRouter in router.methodRouters.pairs():
+    if methodRouter.kind == routeByRope:
+      router.methodRouters[key] = MethodRouter(kind:routeByTree, tree:group(methodRouter.ropes))
+
+#
+# Debugging routines
+
+proc printRoutingSequence(matchers : seq[PatternRope]) =
+  for matcher in matchers.items():
+    for tabs, piece in matcher.pattern.pairs():
+      echo ' '.repeat(tabs), $piece
+
+proc printRoutingSequence(node : PatternNode, tabs : int = 0) =
+  echo ' '.repeat(tabs), $node
+  if not node.isLeaf:
+    for child in node.children:
+      printRoutingSequence(child, tabs + 1)
+
+
+
+#
 # Procedures to match against paths
 #
 
-proc matchPattern(pattern : seq[MatcherPiece], path : string) : PathMatchingResult {.noSideEffect.} =
-  block checkMatch: #a single run, this can be broken if anything checked doesn't match
-    var scanningWildcard, scanningParameter = false
-    var parameterBeingScanned : string
-    var pathIndex = 0
-    var pathArgs = newStringTable()
-    for piece in pattern:
-      case piece.kind:
-        of matcherText:
-          if scanningWildcard or scanningParameter:
-            if piece.value == "": #end of pieces to pattern, close out the scanning
-              if scanningParameter:
-                pathArgs[parameterBeingScanned] = path.substr(pathIndex)
-              scanningWildcard = false
-              scanningParameter = false
-            elif not path.contains(piece.value):
-              break checkMatch
-            else: #skip forward til end of wildcard, then past the encountered text
-              let paramEndIndex = path.find(piece.value, pathIndex) - 1
-              if scanningParameter:
-                pathArgs[parameterBeingScanned] = path.substr(pathIndex, paramEndIndex)
-              pathIndex = paramEndIndex + piece.value.len() + 1
-              scanningWildcard = false
-              scanningParameter = false
-          else:
-            if path.continuesWith(piece.value, pathIndex):
-              pathIndex += piece.value.len()
-            else:
-              break checkMatch
-        of matcherWildcard:
-          assert(not scanningWildcard and not scanningParameter)
-          scanningWildcard = true
-        of matcherParam:
-          assert(not scanningWildcard and not scanningParameter)
-          scanningParameter = true
-          parameterBeingScanned = piece.value
+proc matchTree(
+  node : PatternNode,
+  path : string,
+  headers : StringTableRef,
+  pathIndex : int = 0,
+  scanningWildcard : bool = false,
+  scanningParameter : bool = false,
+  parameterBeingScanned : string = ""
+) : PathMatchingResult {.noSideEffect.} =
+  ##
+  ## Check whether the given path matches the given tree node starting from pathIndex
+  ##
+  var pathArgs = newStringTable()
+  var pathIndex = pathIndex
+  var scanningWildcard = scanningWildcard
+  var scanningParameter = scanningParameter
+  var parameterBeingScanned = parameterBeingScanned
 
-    if not scanningWildcard and not scanningParameter and pathIndex == path.len():
-      return PathMatchingResult(
-        status:pathMatchFound,
-        arguments:PathMatchingArgs(pathArgs:pathArgs)
-      )
-  return PathMatchingResult(status:pathMatchNotFound)
+  case node.kind:
+    of ptrnText:
+      if scanningWildcard or scanningParameter:
+        if not path.contains(node.value):
+          return PathMatchingResult(status:pathMatchNotFound)
+        else: #skip forward til end of wildcard/param, then past the encountered text
+          let paramEndIndex = path.find(node.value, pathIndex) - 1
+          if scanningParameter:
+            pathArgs[parameterBeingScanned] = path.substr(pathIndex, paramEndIndex)
+          pathIndex = paramEndIndex + node.value.len() + 1
+          scanningWildcard = false
+          scanningParameter = false
+      else:
+        if path.continuesWith(node.value, pathIndex):
+          pathIndex += node.value.len()
+        else:
+          return PathMatchingResult(status:pathMatchNotFound)
+    of ptrnWildcard:
+      assert(not scanningWildcard and not scanningParameter)
+      scanningWildcard = true
+    of ptrnParam:
+      assert(not scanningWildcard and not scanningParameter)
+      scanningParameter = true
+      parameterBeingScanned = node.value
+    of ptrnStartHeaderConstraint:
+      discard
+    of ptrnEndHeaderConstraint:
+      discard
 
-proc matchPath(matcher : PathMatcher, path : string, logger : Logger) : PathMatchingResult {.noSideEffect.} =
-  let patternResult = matchPattern(matcher.pattern, path)
-  case patternResult.status:
-    of pathMatchFound:
-      return PathMatchingResult(status:pathMatchFound, handler:matcher.handler, arguments:patternResult.arguments)
-    of pathMatchNotFound:
-      return PathMatchingResult(status:pathMatchNotFound)
+  if pathIndex == len(path) and node.isTerminator:
+    return PathMatchingResult(
+      status:pathMatchFound,
+      handler:node.handler,
+      arguments:PathMatchingArgs(pathArgs:pathArgs)
+    )
+  elif pathIndex == len(path) and not node.isTerminator:
+    return PathMatchingResult(status:pathMatchNotFound)
+  elif node.isLeaf:
+    return PathMatchingResult(status:pathMatchNotFound)
+  else:
+    for child in node.children:
+      let result = child.matchTree(path, headers, pathIndex, scanningWildcard, scanningParameter, parameterBeingScanned)
 
-proc matchHeaders(matcher : PathMatcher, headers : StringTableRef, logger : Logger) : PathMatchingResult =
-  if (headers == nil or headers.len() == 0) and matcher.headers.len() == 0: #if all of the inputs are empty, no need to check them over
-    return PathMatchingResult(status:pathMatchFound)
-
-  for key, value in matcher.headers.pairs():
-    let patternResult = matchPattern(value, headers.getOrDefault(key))
-    if patternResult.status == pathMatchNotFound:
-      logger.log(lvlError, "Could not match header called '", key, "' in request")
-      return PathMatchingResult(status:pathMatchNotFound)
-  return PathMatchingResult(status:pathMatchFound)
-
-proc matchDynamic(pathMatchers : seq[PathMatcher], request : Request, logger : Logger) : PathMatchingResult {.noSideEffect.} =
-  let path = trimPath(request.url.path)
-  result = PathMatchingResult(status:pathMatchNotFound)
-
-  for matcher in pathMatchers: # TODO: could this be sped up by using a CritBitTree and pairsWithPrefix?
-    let pathResult = matcher.matchPath(path, logger)
-    if pathResult.status == pathMatchFound:
-      let headerResult = matcher.matchHeaders(request.headers, logger)
-      if headerResult.status == pathMatchFound:
-        return pathResult
+      if result.status == pathMatchFound:
+        for key, value in result.arguments.pathArgs:
+          pathArgs[key] = value
+        return PathMatchingResult(
+          status:pathMatchFound,
+          handler:result.handler,
+          arguments:PathMatchingArgs(pathArgs:pathArgs)
+        )
+    return PathMatchingResult(status:pathMatchNotFound)
 
 proc route*(
   router : Router,
@@ -299,7 +484,7 @@ proc route*(
 
     if router.methodRouters.hasKey(verb):
       result = (statusCode: Http200, headers: newStringTable(), content: "")
-      var matchingResult = matchDynamic(router.methodRouters[verb].matchers, request, logger)
+      var matchingResult = matchTree(router.methodRouters[verb].tree, trimPath(request.url.path), request.headers)
 
       # actually call the handler, or 404
       case matchingResult.status:
@@ -315,8 +500,3 @@ proc route*(
   except:
     logger.log(lvlError, "Internal error occured:\n\t", getCurrentExceptionMsg())
     result = (statusCode: Http500, headers: newStringTable(), content: getErrorContent(Http500, request, logger))
-
-
-#
-# Mapping macros
-#

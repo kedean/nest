@@ -1,6 +1,6 @@
 import src/router
 import logging
-import asynchttpserver, strtabs, times, asyncdispatch
+import asynchttpserver, strtabs, times, asyncdispatch, math
 
 type
   RequestHandler = proc (
@@ -23,19 +23,27 @@ proc root(
 
 routing.map(root, GET, "/")
 
-proc parameterized(
-  req: Request,
-  headers : var StringTableRef,
-  args : PathMatchingArgs
-) : string {.gcsafe.} =
-  return "you passed an argument: " & args.pathArgs.getOrDefault("test")
+let iterations = 1000
 
-routing.map(parameterized, GET, "/{test}/foo")
+for i in 0..iterations:
+  routing.map(proc (
+      req: Request,
+      headers : var StringTableRef,
+      args : PathMatchingArgs
+    ) : string {.gcsafe.} =
+      return "you passed an argument: " & args.pathArgs.getOrDefault("test")
+    , GET, "/{test}/" & $i)
 
 # start up the server
 let server = newAsyncHttpServer()
 logger.log(lvlInfo, "****** Started server on ", getTime(), " ******")
 proc dispatch(req: Request) {.async, gcsafe.} =
+  let startT = epochTime()
   let (statusCode, headers, content) = routing.route(req)
+  let endT = epochTime()
+  echo req.url.path, ",", ceil((endT - startT) * 1000000)
   await req.respond(statusCode, content, headers)
+
+routing.compress()
+
 waitFor server.serve(Port(8080), dispatch)
