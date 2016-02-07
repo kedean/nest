@@ -1,6 +1,6 @@
 import strutils, parseutils, strtabs, sequtils
 import logging
-import tables, critbits
+import critbits
 from asynchttpserver import Request, HttpCode
 
 #
@@ -41,7 +41,7 @@ type
         discard
   PathMatcher = tuple
     pattern : seq[MatcherPiece]
-    headers : TableRef[string, seq[MatcherPiece]]
+    headers : CritBitTree[seq[MatcherPiece]]
     handler : RequestHandler
 
   MethodRouter = ref object
@@ -144,7 +144,7 @@ proc map*(
     methodRouter = MethodRouter(matchers:newSeq[PathMatcher]())
     router.methodRouters[$verb] = methodRouter
 
-  var matcherHeaders = newTable[string, seq[MatcherPiece]]()
+  var matcherHeaders = CritBitTree[seq[MatcherPiece]]()
   if headers != nil:
     for key, value in headers:
       matcherHeaders[key] = generatePatternSequence(value)
@@ -196,11 +196,16 @@ proc trimPath(path : string) : string {.noSideEffect.} =
     path.removeSuffix('/') #trailing slashes are considered redundant
   result = path
 
-proc getErrorContent(verb : HttpCode, request : Request) : string {.noSideEffect.} =
+proc getErrorContent(verb : HttpCode, request : Request, logger : Logger) : string {.noSideEffect.} =
   ##
   ## Generates an error page for the given verb and request.
   ## TODO: This should be able to use user-defined error handlers too
   result = $verb
+
+  if verb == Http404:
+    logger.log(lvlError, "No mapping found for path '", request.url.path, "' with method '", request.reqMethod, "'")
+  elif verb == Http500:
+    logger.log(lvlError, "Internal server error occurred")
 
 #
 # Procedures to match against paths
@@ -284,20 +289,34 @@ proc route*(
   router : Router,
   request : Request
 ) : RequestMatchingResult {.gcsafe.} =
-  let verb = request.reqMethod.toLower()
+  ##
+  ## Find a mapping that matches the given request, and execute it's associated handler
+  ##
+  let logger = router.logger
 
-  if router.methodRouters.hasKey(verb):
-    result = (statusCode: Http200, headers: newStringTable(), content: "")
-    var matchingResult = matchDynamic(router.methodRouters[verb].matchers, request, router.logger)
+  try:
+    let verb = request.reqMethod.toLower()
 
-    # actually call the handler, or 404
-    case matchingResult.status:
-      of pathMatchNotFound: # it's a 404!
-        result = (statusCode: Http404, headers: newStringTable(), content: getErrorContent(Http404, request))
-      of pathMatchFound:
-        matchingResult.arguments.queryArgs = extractEncodedParams(request.url.query)
-        matchingResult.arguments.bodyArgs = extractFormBody(request.body, request.headers.getOrDefault("Content-Type"))
+    if router.methodRouters.hasKey(verb):
+      result = (statusCode: Http200, headers: newStringTable(), content: "")
+      var matchingResult = matchDynamic(router.methodRouters[verb].matchers, request, logger)
 
-        result.content = matchingResult.handler(request, result.headers, matchingResult.arguments)
-  else:
-    result = (statusCode: Http405, headers: newStringTable(), content: getErrorContent(Http405, request))
+      # actually call the handler, or 404
+      case matchingResult.status:
+        of pathMatchNotFound: # it's a 404!
+          result = (statusCode: Http404, headers: newStringTable(), content: getErrorContent(Http404, request, logger))
+        of pathMatchFound:
+          matchingResult.arguments.queryArgs = extractEncodedParams(request.url.query)
+          matchingResult.arguments.bodyArgs = extractFormBody(request.body, request.headers.getOrDefault("Content-Type"))
+
+          result.content = matchingResult.handler(request, result.headers, matchingResult.arguments)
+    else:
+      result = (statusCode: Http405, headers: newStringTable(), content: getErrorContent(Http405, request, logger))
+  except:
+    logger.log(lvlError, "Internal error occured:\n\t", getCurrentExceptionMsg())
+    result = (statusCode: Http500, headers: newStringTable(), content: getErrorContent(Http500, request, logger))
+
+
+#
+# Mapping macros
+#

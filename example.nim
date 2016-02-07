@@ -1,84 +1,41 @@
-import src/nest_macros
-import strutils
+import src/router
+import logging
+import asynchttpserver, strtabs, times, asyncdispatch
 
-onPort(8080):
-  get("/"):
-    sendHeader("x-foo", "bar")
-    return """
-    <html>
-    <body>
-    I am the root page. Your user agent is '$1'!
-    <br/><br/>
-    <a href="/leaf">Go to leaf page</a><br />
-    <a href="/foo/bar">Go to page with wildcard</a><br />
-    <a href="/parameterized/testParam">Go to page with path parameters</a><br />
-    <a href="/queryString?test1=foo&test2=bar">Go to page with query parameters</a><br />
-    <a href="/form">Go to page with a POST form</a><br />
-    </body>
-    </html>
-    """.format(getHeader("User-Agent"))
+type
+  RequestHandler = proc (
+    req: Request,
+    headers : var StringTableRef,
+    args : PathMatchingArgs
+  ) : string {.gcsafe.}
 
-  get("/leaf"):
-    return """
-    <html>
-    <body>
-    I am a leaf page
-    <br/><br/>
-    <a href="/">Go back</a>
-    """
+let logger = newConsoleLogger()
+let routing = newRouter(logger)
+logger.log(lvlInfo, "****** Created server on ", getTime(), " ******")
 
-  get("/form"):
-    return """
-    <html>
-    <body>
-    This is a form, try submitting it!
-    <form method="POST" action="/form">
-      <input type="text" name="field1" /><Br />
-      <input type="text" name="field2" /><Br />
-      <input type="submit" />
-    </form>
-    <br/><br />
-    <a href="/">Go back</a>
-    </body>
-    </html>
-    """
+# Set up mappings
+proc root(
+  req: Request,
+  headers : var StringTableRef,
+  args : PathMatchingArgs
+) : string {.gcsafe.} =
+  return "this is the root page"
 
-  post("/form"):
-    return """
-    <html>
-    <body>
-    You submitted a field1 value of '$1' and a field2 value of '$2'
-    <br /><br />
-    <a href="/">Go back</a>
-    </body>
-    </html>
-    """.format(modelParam("field1"), modelParam("field2"))
+routing.map(root, GET, "/")
 
-  get("/*/bar"):
-    return """
-    <html>
-    <body>
-    I used a wildcard path. Try changing the portion before "bar" to something else!
-    <br/><br/>
-    <a href="/">Go back</a>
-    """
+proc parameterized(
+  req: Request,
+  headers : var StringTableRef,
+  args : PathMatchingArgs
+) : string {.gcsafe.} =
+  return "you passed an argument: " & args.pathArgs.getOrDefault("test")
 
-  get("/parameterized/{test}/"):
-    return """
-    <html>
-    <body>
-    Your path param was $1. Try changing it to something else!
-    <br/><br/>
-    <a href="/">Go back</a>
-    """.format(pathParam("test"))
+routing.map(parameterized, GET, "/{test}/foo")
 
-  get("/queryString"):
-    return """
-    <html>
-    <body>
-    Your query param 'test1' was '$1' and 'test2' was '$2'. Try changing it to something else!
-    <br/><br/>
-    <a href="/">Go back</a>
-    """.format(queryParam("test1"), queryParam("test2"))
-
-  echo "Starting server..."
+# start up the server
+let server = newAsyncHttpServer()
+logger.log(lvlInfo, "****** Started server on ", getTime(), " ******")
+proc dispatch(req: Request) {.async, gcsafe.} =
+  let (statusCode, headers, content) = routing.route(req)
+  await req.respond(statusCode, content, headers)
+waitFor server.serve(Port(8080), dispatch)
