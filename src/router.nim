@@ -16,10 +16,10 @@ const specialSectionStartChars = {pathSeparator, wildcard, startParam}
 const allowedCharsInPattern = allowedCharsInUrl + {wildcard, startParam, endParam}
 
 type
-  RequestHandler = proc (
+  RequestHandler* = proc (
     req: Request,
     headers : var StringTableRef,
-    args : PathMatchingArgs
+    args : RoutingArgs
   ) : string {.gcsafe.}
 
   HttpVerb* = enum
@@ -87,25 +87,24 @@ type
 
   RoutingError = object of Exception
 
-  PathMatchingArgs* = object
+  RoutingArgs* = object
     pathArgs* : StringTableRef
     queryArgs* : StringTableRef
     bodyArgs* : StringTableRef
 
-  PathMatchingResultType = enum
+  RoutingResultType* = enum
     pathMatchFound
     pathMatchNotFound
-  PathMatchingResult = object
-    case status* : PathMatchingResultType:
+    pathMatchError
+  RoutingResult* = object
+    case status* : RoutingResultType:
       of pathMatchFound:
         handler* : RequestHandler
-        arguments* : PathMatchingArgs
+        arguments* : RoutingArgs
       of pathMatchNotFound:
         discard
-  RequestMatchingResult* = tuple
-    statusCode : HttpCode
-    headers : StringTableRef
-    content : string
+      of pathMatchError:
+        cause : ref Exception
 
 #
 # Stringification
@@ -418,7 +417,7 @@ proc matchTree(
   scanningWildcard : bool = false,
   scanningParameter : bool = false,
   parameterBeingScanned : string = ""
-) : PathMatchingResult {.noSideEffect.} =
+) : RoutingResult {.noSideEffect.} =
   ##
   ## Check whether the given path matches the given tree node starting from pathIndex
   ##
@@ -432,11 +431,11 @@ proc matchTree(
     of ptrnText:
       if scanningWildcard or scanningParameter:
         if not path.contains(node.value):
-          return PathMatchingResult(status:pathMatchNotFound)
+          return RoutingResult(status:pathMatchNotFound)
         else: #skip forward til end of wildcard/param, then past the encountered text
           let paramEndIndex = path.find(node.value, pathIndex) - 1
           if paramEndIndex < 0:
-            return PathMatchingResult(status:pathMatchNotFound)
+            return RoutingResult(status:pathMatchNotFound)
           else:
             if scanningParameter:
               pathArgs[parameterBeingScanned] = path.substr(pathIndex, paramEndIndex)
@@ -447,7 +446,7 @@ proc matchTree(
         if path.continuesWith(node.value, pathIndex):
           pathIndex += node.value.len()
         else:
-          return PathMatchingResult(status:pathMatchNotFound)
+          return RoutingResult(status:pathMatchNotFound)
     of ptrnWildcard:
       assert(not scanningWildcard and not scanningParameter)
       scanningWildcard = true
@@ -461,18 +460,18 @@ proc matchTree(
       discard
 
   if pathIndex == len(path) and node.isTerminator:
-    return PathMatchingResult(
+    return RoutingResult(
       status:pathMatchFound,
       handler:node.handler,
-      arguments:PathMatchingArgs(pathArgs:pathArgs)
+      arguments:RoutingArgs(pathArgs:pathArgs)
     )
   elif pathIndex == len(path) and not node.isTerminator:
-    return PathMatchingResult(status:pathMatchNotFound)
+    return RoutingResult(status:pathMatchNotFound)
   elif node.isLeaf:
-    return PathMatchingResult(status:pathMatchNotFound)
+    return RoutingResult(status:pathMatchNotFound)
   else:
     for child in node.children:
-      let result = child.matchTree(
+      let childResult = child.matchTree(
         path=path,
         headers=headers,
         pathIndex=pathIndex,
@@ -481,20 +480,20 @@ proc matchTree(
         parameterBeingScanned=parameterBeingScanned
       )
 
-      if result.status == pathMatchFound:
-        for key, value in result.arguments.pathArgs:
+      if childResult.status == pathMatchFound:
+        for key, value in childResult.arguments.pathArgs:
           pathArgs[key] = value
-        return PathMatchingResult(
+        return RoutingResult(
           status:pathMatchFound,
-          handler:result.handler,
-          arguments:PathMatchingArgs(pathArgs:pathArgs)
+          handler:childResult.handler,
+          arguments:RoutingArgs(pathArgs:pathArgs)
         )
-    return PathMatchingResult(status:pathMatchNotFound)
+    return RoutingResult(status:pathMatchNotFound)
 
 proc route*(
   router : Router,
   request : Request
-) : RequestMatchingResult {.gcsafe.} =
+) : RoutingResult {.gcsafe.} =
   ##
   ## Find a mapping that matches the given request, and execute it's associated handler
   ##
@@ -509,19 +508,13 @@ proc route*(
         compress(router)
         methodRouter = router.methodRouters[verb]
 
-      result = (statusCode: Http200, headers: newStringTable(), content: "")
-      var matchingResult = matchTree(router.methodRouters[verb].tree, trimPath(request.url.path), request.headers)
-      # actually call the handler, or 404
-      case matchingResult.status:
-        of pathMatchNotFound: # it's a 404!
-          result = (statusCode: Http404, headers: newStringTable(), content: getErrorContent(Http404, request, logger))
-        of pathMatchFound:
-          matchingResult.arguments.queryArgs = extractEncodedParams(request.url.query)
-          matchingResult.arguments.bodyArgs = extractFormBody(request.body, request.headers.getOrDefault("Content-Type"))
+      result = matchTree(router.methodRouters[verb].tree, trimPath(request.url.path), request.headers)
 
-          result.content = matchingResult.handler(request, result.headers, matchingResult.arguments)
+      if result.status == pathMatchFound:
+        result.arguments.queryArgs = extractEncodedParams(request.url.query)
+        result.arguments.bodyArgs = extractFormBody(request.body, request.headers.getOrDefault("Content-Type"))
     else:
-      result = (statusCode: Http405, headers: newStringTable(), content: getErrorContent(Http405, request, logger))
+      result = RoutingResult(status:pathMatchNotFound)
   except:
     logger.log(lvlError, "Internal error occured:\n\t", getCurrentExceptionMsg())
-    result = (statusCode: Http500, headers: newStringTable(), content: getErrorContent(Http500, request, logger))
+    result = RoutingResult(status:pathMatchError, cause:getCurrentException())
