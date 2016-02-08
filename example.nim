@@ -23,7 +23,7 @@ proc root(
 
 routing.map(root, GET, "/")
 
-let iterations = 1000
+let iterations = 100
 
 for i in 0..iterations:
   routing.map(proc (
@@ -34,6 +34,9 @@ for i in 0..iterations:
       return "you passed an argument: " & args.pathArgs.getOrDefault("test")
     , GET, "/{test}/" & $i)
 
+logger.log(lvlInfo, "****** Compressing routing tree ******")
+compress(routing)
+
 # start up the server
 let server = newAsyncHttpServer()
 logger.log(lvlInfo, "****** Started server on ", getTime(), " ******")
@@ -43,7 +46,5 @@ proc dispatch(req: Request) {.async, gcsafe.} =
   let endT = epochTime()
   echo req.url.path, ",", ceil((endT - startT) * 1000000)
   await req.respond(statusCode, content, headers)
-
-routing.compress()
 
 waitFor server.serve(Port(8080), dispatch)

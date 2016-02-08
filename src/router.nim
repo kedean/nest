@@ -381,18 +381,29 @@ proc compress*(router : Router) {.gcsafe.} =
 
 #
 # Debugging routines
+#
 
-proc printRoutingSequence(matchers : seq[PatternRope]) =
+proc printRoutingRope(matchers : seq[PatternRope]) =
   for matcher in matchers.items():
     for tabs, piece in matcher.pattern.pairs():
       echo ' '.repeat(tabs), $piece
 
-proc printRoutingSequence(node : PatternNode, tabs : int = 0) =
+proc printRoutingTree(node : PatternNode, tabs : int = 0) =
   echo ' '.repeat(tabs), $node
   if not node.isLeaf:
     for child in node.children:
-      printRoutingSequence(child, tabs + 1)
+      printRoutingTree(child, tabs + 1)
 
+proc printMappings*(router : Router) {.gcsafe.} =
+  echo "fjlsdk ", router.methodRouters.len()
+  for verb, methodRouter in router.methodRouters.pairs():
+    case methodRouter.kind:
+      of routeByRope:
+        echo verb.toUpper(), " - Rope-Based Routing: **NOTICE: YOUR ROUTER NEEDS TO BE COMPRESSED**"
+        printRoutingRope(methodRouter.ropes)
+      of routeByTree:
+        echo verb.toUpper(), " - Tree-Based Routing"
+        printRoutingTree(methodRouter.tree)
 
 
 #
@@ -424,11 +435,14 @@ proc matchTree(
           return PathMatchingResult(status:pathMatchNotFound)
         else: #skip forward til end of wildcard/param, then past the encountered text
           let paramEndIndex = path.find(node.value, pathIndex) - 1
-          if scanningParameter:
-            pathArgs[parameterBeingScanned] = path.substr(pathIndex, paramEndIndex)
-          pathIndex = paramEndIndex + node.value.len() + 1
-          scanningWildcard = false
-          scanningParameter = false
+          if paramEndIndex < 0:
+            return PathMatchingResult(status:pathMatchNotFound)
+          else:
+            if scanningParameter:
+              pathArgs[parameterBeingScanned] = path.substr(pathIndex, paramEndIndex)
+            pathIndex = paramEndIndex + node.value.len() + 1
+            scanningWildcard = false
+            scanningParameter = false
       else:
         if path.continuesWith(node.value, pathIndex):
           pathIndex += node.value.len()
@@ -458,7 +472,14 @@ proc matchTree(
     return PathMatchingResult(status:pathMatchNotFound)
   else:
     for child in node.children:
-      let result = child.matchTree(path, headers, pathIndex, scanningWildcard, scanningParameter, parameterBeingScanned)
+      let result = child.matchTree(
+        path=path,
+        headers=headers,
+        pathIndex=pathIndex,
+        scanningWildcard=scanningWildcard,
+        scanningParameter=scanningParameter,
+        parameterBeingScanned=parameterBeingScanned
+      )
 
       if result.status == pathMatchFound:
         for key, value in result.arguments.pathArgs:
@@ -483,9 +504,13 @@ proc route*(
     let verb = request.reqMethod.toLower()
 
     if router.methodRouters.hasKey(verb):
+      var methodRouter = router.methodRouters[verb]
+      if methodRouter.kind == routeByRope: # need to compress!
+        compress(router)
+        methodRouter = router.methodRouters[verb]
+
       result = (statusCode: Http200, headers: newStringTable(), content: "")
       var matchingResult = matchTree(router.methodRouters[verb].tree, trimPath(request.url.path), request.headers)
-
       # actually call the handler, or 404
       case matchingResult.status:
         of pathMatchNotFound: # it's a 404!
