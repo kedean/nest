@@ -1,7 +1,9 @@
 import strutils, parseutils, strtabs, sequtils
 import logging
 import critbits
-from asynchttpserver import Request, HttpCode
+import URI
+
+export URI, strtabs
 
 #
 #Type Declarations
@@ -16,11 +18,6 @@ const specialSectionStartChars = {pathSeparator, wildcard, startParam}
 const allowedCharsInPattern = allowedCharsInUrl + {wildcard, startParam, endParam}
 
 type
-  RequestHandler* = proc (
-    req: Request,
-    headers : var StringTableRef,
-    args : RoutingArgs
-  ) : string {.gcsafe.}
 
   HttpVerb* = enum
     GET = "get"
@@ -45,12 +42,12 @@ type
         discard
       of ptrnStartHeaderConstraint:
         headerName : string
-  PatternRope = tuple
+  PatternRope[H] = tuple
     pattern : seq[PatternKnot]
-    handler : RequestHandler
+    handler : H
 
   # Structures for holding fully parsed mappings
-  PatternNode = ref object
+  PatternNode[H] = ref object
     case kind : PatternMatchingType: # TODO: should be able to extend PatternKnot to get this, compiled wont let me, investigate further
       of ptrnParam, ptrnText:
         value : string
@@ -62,10 +59,10 @@ type
       of true:
         discard
       of false:
-        children : seq[PatternNode]
+        children : seq[PatternNode[H]]
     case isTerminator : bool: # a terminator is a node that can be considered a mapping on its own, matching could stop at this node or continue. If it is not a terminator, matching can only continue
       of true:
-        handler : RequestHandler
+        handler : H
       of false:
         discard
 
@@ -74,15 +71,15 @@ type
   MethodRouterType = enum # we can either use rope routes or tree routers (spawned from ropes), which are more efficient
     routeByRope
     routeByTree
-  MethodRouter = ref object
+  MethodRouter[H] = ref object
     case kind : MethodRouterType:
       of routeByRope:
-        ropes : seq[PatternRope]
+        ropes : seq[PatternRope[H]]
       of routeByTree:
-        tree : PatternNode
+        tree : PatternNode[H]
 
-  Router* = ref object
-    methodRouters : CritBitTree[MethodRouter]
+  Router*[H] = ref object
+    methodRouters : CritBitTree[MethodRouter[H]]
     logger : Logger
 
   RoutingError = object of Exception
@@ -96,10 +93,10 @@ type
     pathMatchFound
     pathMatchNotFound
     pathMatchError
-  RoutingResult* = object
+  RoutingResult*[H] = object
     case status* : RoutingResultType:
       of pathMatchFound:
-        handler* : RequestHandler
+        handler* : H
         arguments* : RoutingArgs
       of pathMatchNotFound:
         discard
@@ -117,7 +114,7 @@ proc `$`(piece : PatternKnot) : string =
       result = $(piece.kind)
     of ptrnStartHeaderConstraint:
       result = $(piece.kind) & ":" & piece.headerName
-proc `$`(node : PatternNode) : string =
+proc `$`[H](node : PatternNode[H]) : string =
   case node.kind:
     of ptrnParam, ptrnText:
       result = $(node.kind) & ":value=" & node.value & ", "
@@ -130,9 +127,9 @@ proc `$`(node : PatternNode) : string =
 #
 # Constructors
 #
-proc newRouter*(logger : Logger = newConsoleLogger()) : Router =
-  return Router(
-    methodRouters : CritBitTree[MethodRouter](),
+proc newRouter*[H](logger : Logger = newConsoleLogger()) : Router[H] =
+  return Router[H](
+    methodRouters : CritBitTree[MethodRouter[H]](),
     logger: logger
   )
 
@@ -192,9 +189,9 @@ proc generatePatternSequence(
   else: #no more wildcards or parameter defs, the rest is static text
     return @[PatternKnot(kind:ptrnText, value:token)]
 
-proc map*(
-  router : Router,
-  handler : RequestHandler,
+proc map*[H](
+  router : Router[H],
+  handler : H,
   verb: HttpVerb,
   pattern : string,
   headers : StringTableRef = newStringTable()
@@ -213,11 +210,11 @@ proc map*(
   if not (pattern[0] == '/'): #ensure each pattern is relative to root
     pattern.insert("/")
 
-  var methodRouter : MethodRouter
+  var methodRouter : MethodRouter[H]
   try:
     methodRouter = router.methodRouters[$verb]
   except KeyError:
-    methodRouter = MethodRouter(kind:routeByRope, ropes:newSeq[PatternRope]())
+    methodRouter = MethodRouter[H](kind:routeByRope, ropes:newSeq[PatternRope[H]]())
     router.methodRouters[$verb] = methodRouter
 
   var rope = generatePatternSequence(pattern)
@@ -275,43 +272,32 @@ proc trimPath(path : string) : string {.noSideEffect.} =
     path.removeSuffix('/') #trailing slashes are considered redundant
   result = path
 
-proc getErrorContent(verb : HttpCode, request : Request, logger : Logger) : string {.noSideEffect.} =
-  ##
-  ## Generates an error page for the given verb and request.
-  ## TODO: This should be able to use user-defined error handlers too
-  result = $verb
-
-  if verb == Http404:
-    logger.log(lvlError, "No mapping found for path '", request.url.path, "' with method '", request.reqMethod, "'")
-  elif verb == Http500:
-    logger.log(lvlError, "Internal server error occurred")
-
 #
 # Compression routines, compression makes matching more efficient, and it must be done before routing
 #
 
-proc knotToNode(rope : PatternRope, index : int, isLeaf : bool, isTerminator : bool) : PatternNode {.noSideEffect.} =
+proc knotToNode[H](rope : PatternRope[H], index : int, isLeaf : bool, isTerminator : bool) : PatternNode[H] {.noSideEffect.} =
   let knot = rope.pattern[index]
 
   case knot.kind:
     of ptrnText, ptrnParam:
       if isTerminator:
-        result = PatternNode(kind: knot.kind, value: knot.value, isLeaf: isLeaf, isTerminator: true, handler: rope.handler)
+        result = PatternNode[H](kind: knot.kind, value: knot.value, isLeaf: isLeaf, isTerminator: true, handler: rope.handler)
       else:
-        result = PatternNode(kind: knot.kind, value: knot.value, isLeaf: isLeaf, isTerminator: false)
+        result = PatternNode[H](kind: knot.kind, value: knot.value, isLeaf: isLeaf, isTerminator: false)
     of ptrnWildcard, ptrnEndHeaderConstraint:
       if isTerminator:
-        result = PatternNode(kind: knot.kind, isLeaf: isLeaf, isTerminator: true, handler: rope.handler)
+        result = PatternNode[H](kind: knot.kind, isLeaf: isLeaf, isTerminator: true, handler: rope.handler)
       else:
-        result = PatternNode(kind: knot.kind, isLeaf: isLeaf, isTerminator: false)
+        result = PatternNode[H](kind: knot.kind, isLeaf: isLeaf, isTerminator: false)
     of ptrnStartHeaderConstraint:
       if isTerminator:
-        result = PatternNode(kind: knot.kind, headerName: knot.headerName, isLeaf: isLeaf, isTerminator: true, handler: rope.handler)
+        result = PatternNode[H](kind: knot.kind, headerName: knot.headerName, isLeaf: isLeaf, isTerminator: true, handler: rope.handler)
       else:
-        result = PatternNode(kind: knot.kind, headerName: knot.headerName, isLeaf: isLeaf, isTerminator: false)
+        result = PatternNode[H](kind: knot.kind, headerName: knot.headerName, isLeaf: isLeaf, isTerminator: false)
 
 
-proc group(matchers : seq[PatternRope], prefixCriteria : string = $(@[PatternKnot(kind:ptrnText, value:($pathSeparator))]), knotIndex : int = 0) : PatternNode {.gcsafe.} =
+proc group[H](matchers : seq[PatternRope[H]], prefixCriteria : string = $(@[PatternKnot(kind:ptrnText, value:($pathSeparator))]), knotIndex : int = 0) : PatternNode[H] {.gcsafe.} =
   ##
   ## Create a node containing each knot that has the given criteria at the given knot index
   ##
@@ -343,10 +329,10 @@ proc group(matchers : seq[PatternRope], prefixCriteria : string = $(@[PatternKno
         result.children = @[matchers.group($pattern[0..knotIndex+1], knotIndex + 1)]
 
     else:
-      var terminatorRope : PatternRope
+      var terminatorRope : PatternRope[H]
       var terminatorRopeFound = false
       var knotsChecked = newSeq[string]()
-      var children = newSeq[PatternNode]()
+      var children = newSeq[PatternNode[H]]()
 
       for matcherIndex in critMatchIndices:
         let pattern = matchers[matcherIndex].pattern
@@ -373,27 +359,27 @@ proc group(matchers : seq[PatternRope], prefixCriteria : string = $(@[PatternKno
 
       result.children = children
 
-proc compress*(router : Router) {.gcsafe.} =
+proc compress*[H](router : Router[H]) {.gcsafe.} =
   for key, methodRouter in router.methodRouters.pairs():
     if methodRouter.kind == routeByRope:
-      router.methodRouters[key] = MethodRouter(kind:routeByTree, tree:group(methodRouter.ropes))
+      router.methodRouters[key] = MethodRouter[H](kind:routeByTree, tree:group(methodRouter.ropes))
 
 #
 # Debugging routines
 #
 
-proc printRoutingRope(matchers : seq[PatternRope]) =
+proc printRoutingRope[H](matchers : seq[PatternRope[H]]) =
   for matcher in matchers.items():
     for tabs, piece in matcher.pattern.pairs():
       echo ' '.repeat(tabs), $piece
 
-proc printRoutingTree(node : PatternNode, tabs : int = 0) =
+proc printRoutingTree[H](node : PatternNode[H], tabs : int = 0) =
   echo ' '.repeat(tabs), $node
   if not node.isLeaf:
     for child in node.children:
       printRoutingTree(child, tabs + 1)
 
-proc printMappings*(router : Router) {.gcsafe.} =
+proc printMappings*[H](router : Router[H]) {.gcsafe.} =
   echo "fjlsdk ", router.methodRouters.len()
   for verb, methodRouter in router.methodRouters.pairs():
     case methodRouter.kind:
@@ -409,15 +395,15 @@ proc printMappings*(router : Router) {.gcsafe.} =
 # Procedures to match against paths
 #
 
-proc matchTree(
-  node : PatternNode,
+proc matchTree[H](
+  node : PatternNode[H],
   path : string,
   headers : StringTableRef,
   pathIndex : int = 0,
   scanningWildcard : bool = false,
   scanningParameter : bool = false,
   parameterBeingScanned : string = ""
-) : RoutingResult {.noSideEffect.} =
+) : RoutingResult[H] {.noSideEffect.} =
   ##
   ## Check whether the given path matches the given tree node starting from pathIndex
   ##
@@ -431,11 +417,11 @@ proc matchTree(
     of ptrnText:
       if scanningWildcard or scanningParameter:
         if not path.contains(node.value):
-          return RoutingResult(status:pathMatchNotFound)
+          return RoutingResult[H](status:pathMatchNotFound)
         else: #skip forward til end of wildcard/param, then past the encountered text
           let paramEndIndex = path.find(node.value, pathIndex) - 1
           if paramEndIndex < 0:
-            return RoutingResult(status:pathMatchNotFound)
+            return RoutingResult[H](status:pathMatchNotFound)
           else:
             if scanningParameter:
               pathArgs[parameterBeingScanned] = path.substr(pathIndex, paramEndIndex)
@@ -446,7 +432,7 @@ proc matchTree(
         if path.continuesWith(node.value, pathIndex):
           pathIndex += node.value.len()
         else:
-          return RoutingResult(status:pathMatchNotFound)
+          return RoutingResult[H](status:pathMatchNotFound)
     of ptrnWildcard:
       assert(not scanningWildcard and not scanningParameter)
       scanningWildcard = true
@@ -460,15 +446,15 @@ proc matchTree(
       discard
 
   if pathIndex == len(path) and node.isTerminator:
-    return RoutingResult(
+    return RoutingResult[H](
       status:pathMatchFound,
       handler:node.handler,
       arguments:RoutingArgs(pathArgs:pathArgs)
     )
   elif pathIndex == len(path) and not node.isTerminator:
-    return RoutingResult(status:pathMatchNotFound)
+    return RoutingResult[H](status:pathMatchNotFound)
   elif node.isLeaf:
-    return RoutingResult(status:pathMatchNotFound)
+    return RoutingResult[H](status:pathMatchNotFound)
   else:
     for child in node.children:
       let childResult = child.matchTree(
@@ -483,24 +469,27 @@ proc matchTree(
       if childResult.status == pathMatchFound:
         for key, value in childResult.arguments.pathArgs:
           pathArgs[key] = value
-        return RoutingResult(
+        return RoutingResult[H](
           status:pathMatchFound,
           handler:childResult.handler,
           arguments:RoutingArgs(pathArgs:pathArgs)
         )
-    return RoutingResult(status:pathMatchNotFound)
+    return RoutingResult[H](status:pathMatchNotFound)
 
-proc route*(
-  router : Router,
-  request : Request
-) : RoutingResult {.gcsafe.} =
+proc route*[H](
+  router : Router[H],
+  requestMethod : string,
+  requestUrl : URI,
+  requestHeaders : StringTableRef,
+  requestBody : string
+) : RoutingResult[H] {.gcsafe.} =
   ##
   ## Find a mapping that matches the given request, and execute it's associated handler
   ##
   let logger = router.logger
 
   try:
-    let verb = request.reqMethod.toLower()
+    let verb = requestMethod.toLower()
 
     if router.methodRouters.hasKey(verb):
       var methodRouter = router.methodRouters[verb]
@@ -508,13 +497,13 @@ proc route*(
         compress(router)
         methodRouter = router.methodRouters[verb]
 
-      result = matchTree(router.methodRouters[verb].tree, trimPath(request.url.path), request.headers)
+      result = matchTree(router.methodRouters[verb].tree, trimPath(requestUrl.path), requestHeaders)
 
       if result.status == pathMatchFound:
-        result.arguments.queryArgs = extractEncodedParams(request.url.query)
-        result.arguments.bodyArgs = extractFormBody(request.body, request.headers.getOrDefault("Content-Type"))
+        result.arguments.queryArgs = extractEncodedParams(requestUrl.query)
+        result.arguments.bodyArgs = extractFormBody(requestBody, requestHeaders.getOrDefault("Content-Type"))
     else:
-      result = RoutingResult(status:pathMatchNotFound)
+      result = RoutingResult[H](status:pathMatchNotFound)
   except:
     logger.log(lvlError, "Internal error occured:\n\t", getCurrentExceptionMsg())
-    result = RoutingResult(status:pathMatchError, cause:getCurrentException())
+    result = RoutingResult[H](status:pathMatchError, cause:getCurrentException())
