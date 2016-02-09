@@ -10,31 +10,46 @@ type
     args : RoutingArgs
   ) : string {.gcsafe.}
 
+#
+# Initialization
+#
 let logger = newConsoleLogger()
+let server = newAsyncHttpServer()
 logger.log(lvlInfo, "****** Created server on ", getTime(), " ******")
 
-var routing = newRouter[RequestHandler](logger)
-let iterations = 100
+#
+# Set up mappings
+#
+var mapper = newMapper[RequestHandler](logger)
 
-for i in 0..iterations:
-  routing.map(proc (
-      req: Request,
-      headers : var StringTableRef,
-      args : RoutingArgs
-    ) : string {.gcsafe.} =
-      return "you passed an argument: " & args.pathArgs.getOrDefault("test")
-    , GET, "/{test}/" & $i)
+mapper.map(proc (
+    req: Request,
+    headers : var StringTableRef,
+    args : RoutingArgs
+  ) : string {.gcsafe.} =
+    return "you passed an argument: " & args.pathArgs.getOrDefault("test")
+  , GET, "/{test}/foobar")
+
+mapper.map(proc (
+    req: Request,
+    headers : var StringTableRef,
+    args : RoutingArgs
+  ) : string {.gcsafe.} =
+    return "You must be on localhost!"
+  , GET, "/")
 
 logger.log(lvlInfo, "****** Compressing routing tree ******")
-compress(routing)
+var routes = newRouter(mapper)
 
-let routerPtr = addr routing
-
-# start up the server
-let server = newAsyncHttpServer()
-logger.log(lvlInfo, "****** Started server on ", getTime(), " ******")
+#
+# Set up the dispatcher
+#
+let routerPtr = addr routes
 
 proc dispatch(req: Request) {.async, gcsafe.} =
+  ##
+  ## Figures out what handler to call, and calls it
+  ##
   let matchingResult = routerPtr[].route(req.reqMethod, req.url, req.headers, req.body)
 
   if matchingResult.status == pathMatchNotFound:
@@ -55,4 +70,6 @@ proc dispatch(req: Request) {.async, gcsafe.} =
 
     await req.respond(statusCode, content, headers)
 
+# start up the server
+logger.log(lvlInfo, "****** Started server on ", getTime(), " ******")
 waitFor server.serve(Port(8080), dispatch)
