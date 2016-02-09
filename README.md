@@ -1,56 +1,34 @@
-#Nest
-RESTful API's with Nim
+# Nest
+RESTful routing with Nim!
 
 ## Intro
-This is an attempt at creating a framework for REST API's using [Nim](http://nim-lang.org). It is still in very early alpha stages.
+Nest is a high performance URL mapper/router built in Nim.
 
-## Is this usable?
-Not at all. Check back soon.
-
-## Coming soon
-- cookie management
-- content-type routing rules
-- easier way to access request contents
-- documentation!
+At the moment, Nest needs a lot of work and is *definitely* not ready for production. Feedback is appreciated!
 
 ## Usage
-To use Nest, add an import to it to your code with `import nest`.
+See examples/ for example usage. Note that using this against Nim's built in asynchttpserver is not required, and it is just used for the examples.
 
-### Template based server
-The preferred way to use Nest is with the provided templates: `onPort` and `map`. The `onPort` template takes the port number to server on as an argument, and provides the server to all code under its view. `map` will create a new route from the given path, and use the provided block as the handler. If a second parameter is provided, it is filled with the request context. If a third is provided, it contains a table of the URL parameters.
-
+## Compilation
+To run the example code, use the following invocation:
 ```nim
-import nest_macros
-
-onPort(8080):
-  get("/"):
-    return "this is the root page"
+nim c --path:./ --threads:on -r examples/example1.nim
 ```
+Threads do not need to be enabled, this just shows that they can be.
 
-Using the templates style means you don't have to worry about keeping track of your server, nor do you need to remember the syntax of a RequestHandler procedure.
+## Features
+- Map against any HTTP method and path
+- Server-agnostic
+- URL parameter capture
+- Query string/body parameter capture
+- Plays nice with various logging systems
+- Does not impose restrictions on your handler methods
 
-### Procedural server
-If you prefer to get down with the bare code, you can instantiate a server with `newNestServer`, then use the `addRoute` method to add new routes. You may use the asterisk ('*') as a wildcard character in your route definitions.
-
-Example:
-```nim
-import nest
-
-let server = newNestServer()
-
-server.addRoute(nest.GET, "/", (proc (req: Request, headers : var StringTableRef, pathParams : StringTableRef, queryParams : StringTableRef, modelParams : StringTableRef) : string =
-  return "this is the root page"
-))
-server.addRoute(nest.GET, "/*/foo", (proc (req: Request, headers : var StringTableRef, pathParams : StringTableRef, queryParams : StringTableRef, modelParams : StringTableRef) : string =
-  return "this is a leaf page, generated with a wildcard"
-))
-
-echo "Starting server..."
-
-server.run(8080)
-```
-
-### Accessing parameters
-Named parameters may be accessed with the `param(key)` method, or more specifically with `pathParam(key)`, `queryParam(key)`, and `modelParam(key)`.
-
-Headers may be sent and received with `getHeader(key)` and `sendHeader(key, value)`.
+## Future Features
+- Benchmarking against other routers
+- Adding consumes/produces constraints
+- Removing dependency on HTTP, allow routing on other transport protocols
+- Improve body parameter capture (JSON support?)
+- More documentation!
+- Guarantee thread safety
+- Performance improvements

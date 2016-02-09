@@ -1,4 +1,4 @@
-import src/router
+import router
 
 import logging
 import asynchttpserver, strtabs, times, asyncdispatch, math
