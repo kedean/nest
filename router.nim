@@ -186,7 +186,9 @@ proc generateRope(
       return concat(prefix, suffix)
 
   else: #no more wildcards or parameter defs, the rest is static text
-    return @[MapperKnot(kind:ptrnText, value:token)]
+    result = newSeq[MapperKnot](len(token))
+    for c in token:
+      result.add(MapperKnot(kind:ptrnText, value:($c)))
 
 proc map*[H](
   mapper : Mapper[H],
@@ -407,7 +409,7 @@ proc matchTree[H](
   var scanningWildcard = scanningWildcard
   var scanningParameter = scanningParameter
   var parameterBeingScanned = parameterBeingScanned
-  
+
   case node.kind:
     of ptrnText:
       if scanningWildcard or scanningParameter:

@@ -50,7 +50,10 @@ proc dispatch(req: Request) {.async, gcsafe.} =
   ##
   ## Figures out what handler to call, and calls it
   ##
+  let startT = epochTime()
   let matchingResult = routerPtr[].route(req.reqMethod, req.url, req.headers, req.body)
+  let endT = epochTime()
+  echo "routing took ", ((endT - startT) * 1000), " millis"
 
   if matchingResult.status == pathMatchNotFound:
     await req.respond(Http404, "Resource not found")
