@@ -187,8 +187,8 @@ proc generateRope(
 
   else: #no more wildcards or parameter defs, the rest is static text
     result = newSeq[MapperKnot](len(token))
-    for c in token:
-      result.add(MapperKnot(kind:ptrnText, value:($c)))
+    for i, c in pairs(token):
+      result[i] = MapperKnot(kind:ptrnText, value:($c))
 
 proc map*[H](
   mapper : Mapper[H],
@@ -360,20 +360,39 @@ proc group[H](matchers : seq[MapperRope[H]], prefixCriteria : string = $(@[Mappe
 
       result.children = children
 
+proc compress[H](node : PatternNode[H]) : PatternNode[H] =
+  ##
+  ## Finds sequences of single ptrnText nodes and combines them to reduce the depth of the tree
+  ##
+  if node.isLeaf: #if it's a leaf, there are clearly no descendents, and if it is a terminator then compression will alter the behavior
+    return node
+  elif node.kind == ptrnText and not node.isTerminator and len(node.children) == 1:
+    let compressedChild = compress(node.children[0])
+    if compressedChild.kind == ptrnText:
+      result = compressedChild
+      result.value = node.value & compressedChild.value
+      return
+
+  result = node
+  result.children = map(result.children, compress)
+
 proc newRouter*[H](mapper : Mapper[H]) : Router[H] =
   var methodRouters = CritBitTree[PatternNode[H]]()
   for key, bundle in pairs(mapper.mappings):
-    methodRouters[key] = group(bundle.ropes)
+    methodRouters[key] = bundle.ropes.group().compress()
   result = Router[H](methodRouters:methodRouters, logger:mapper.logger)
 
 #
 # Debugging routines
 #
 
-proc printRoutingRope[H](matchers : seq[MapperRope[H]]) =
+proc printRoutingRope*[H](matchers : seq[MapperRope[H]]) =
   for matcher in matchers.items():
-    for tabs, piece in matcher.pattern.pairs():
-      echo ' '.repeat(tabs), $piece
+    for index, piece in matcher.pattern.pairs():
+      if index != 0:
+        write(stdout, " -> ")
+      write(stdout, $piece)
+    echo "\n"
 
 proc printRoutingTree[H](node : PatternNode[H], tabs : int = 0) =
   echo ' '.repeat(tabs), $node
@@ -381,10 +400,13 @@ proc printRoutingTree[H](node : PatternNode[H], tabs : int = 0) =
     for child in node.children:
       printRoutingTree(child, tabs + 1)
 
+proc printMappings*[H](mapper : Mapper[H]) {.gcsafe.} =
+  for verb, bundle in pairs(mapper.mappings):
+    echo verb.toUpper()
+    printRoutingRope(bundle.ropes)
 proc printMappings*[H](router : Router[H]) {.gcsafe.} =
-  echo "fjlsdk ", router.methodRouters.len()
   for verb, tree in pairs(router.methodRouters):
-    echo verb.toUpper(), " - Tree-Based Routing"
+    echo verb.toUpper()
     printRoutingTree(tree)
 
 

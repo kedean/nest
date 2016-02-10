@@ -22,14 +22,14 @@ logger.log(lvlInfo, "****** Created server on ", getTime(), " ******")
 #
 var mapper = newMapper[RequestHandler](logger)
 
-mapper.map(proc (
-    req: Request,
-    headers : var StringTableRef,
-    args : RoutingArgs
-  ) : string {.gcsafe.} =
-    return "you passed an argument: " & args.pathArgs.getOrDefault("test")
-  , GET, "/{test}/foobar")
-
+for i in 111..119:
+  mapper.map(proc (
+      req: Request,
+      headers : var StringTableRef,
+      args : RoutingArgs
+    ) : string {.gcsafe.} =
+      return "you passed an argument: " & args.pathArgs.getOrDefault("test")
+    , GET, "/{test}/" & ($i))
 mapper.map(proc (
     req: Request,
     headers : var StringTableRef,
@@ -40,7 +40,7 @@ mapper.map(proc (
 
 logger.log(lvlInfo, "****** Compressing routing tree ******")
 var routes = newRouter(mapper)
-
+printMappings(routes)
 #
 # Set up the dispatcher
 #
