@@ -442,31 +442,29 @@ proc matchTree[H](
           pathArgs[node.value] = path.substr(pathIndex, newPathIndex - 1)
           pathIndex = newPathIndex
         of ptrnStartHeaderConstraint:
-          # for child in node.children:
-          #   let childResult = child.matchTree(
-          #     path=headers.getOrDefault(node.headerName),
-          #     pathIndex=0,
-          #     headers=headers
-          #   )
-          #
-          #   if childResult.status == pathMatchFound:
-          #     for key, value in childResult.arguments.pathArgs:
-          #       pathArgs[key] = value
-          #     return RoutingResult[H](
-          #       status:pathMatchFound,
-          #       handler:childResult.handler,
-          #       arguments:RoutingArgs(pathArgs:pathArgs)
-          #     )
-          # return RoutingResult[H](status:pathMatchNotFound)
-          discard
+          for child in node.children:
+            let childResult = child.matchTree(
+              path=headers.getOrDefault(node.headerName),
+              pathIndex=0,
+              headers=headers
+            )
+
+            if childResult.status == pathMatchFound:
+              for key, value in childResult.arguments.pathArgs:
+                pathArgs[key] = value
+              return RoutingResult[H](
+                status:pathMatchFound,
+                handler:childResult.handler,
+                arguments:RoutingArgs(pathArgs:pathArgs)
+              )
+          return RoutingResult[H](status:pathMatchNotFound)
         of ptrnEndHeaderConstraint:
-          # if node.isTerminator and node.isLeaf:
-          #   return RoutingResult[H](
-          #     status:pathMatchFound,
-          #     handler:node.handler,
-          #     arguments:RoutingArgs(pathArgs:pathArgs)
-          #   )
-          discard
+          if node.isTerminator and node.isLeaf:
+            return RoutingResult[H](
+              status:pathMatchFound,
+              handler:node.handler,
+              arguments:RoutingArgs(pathArgs:pathArgs)
+            )
 
       if pathIndex == len(path) and node.isTerminator: #the path was exhausted and we reached a node that has a handler
         return RoutingResult[H](

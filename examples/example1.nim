@@ -34,8 +34,8 @@ mapper.map(proc (
     headers : var StringTableRef,
     args : RoutingArgs
   ) : string {.gcsafe.} =
-    return "You visited " & req.url.path
-  , GET, "/foo/bar")
+    return "You visited " & req.url.path & ". This page requires you visit via localhost!"
+  , GET, "/foo/bar", newStringTable("Host", "localhost", modeCaseInsensitive))
 mapper.map(proc (
     req: Request,
     headers : var StringTableRef,
