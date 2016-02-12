@@ -22,25 +22,46 @@ logger.log(lvlInfo, "****** Created server on ", getTime(), " ******")
 #
 var mapper = newMapper[RequestHandler](logger)
 
-for i in 111..119:
-  mapper.map(proc (
-      req: Request,
-      headers : var StringTableRef,
-      args : RoutingArgs
-    ) : string {.gcsafe.} =
-      return "you passed an argument: " & args.pathArgs.getOrDefault("test")
-    , GET, "/{test}/" & ($i))
 mapper.map(proc (
     req: Request,
     headers : var StringTableRef,
     args : RoutingArgs
   ) : string {.gcsafe.} =
-    return "You must be on localhost!"
+    return "You visited " & req.url.path
   , GET, "/")
-
+mapper.map(proc (
+    req: Request,
+    headers : var StringTableRef,
+    args : RoutingArgs
+  ) : string {.gcsafe.} =
+    return "You visited " & req.url.path
+  , GET, "/foo/bar")
+mapper.map(proc (
+    req: Request,
+    headers : var StringTableRef,
+    args : RoutingArgs
+  ) : string {.gcsafe.} =
+    return "You visited " & req.url.path & " with arg " & args.pathArgs.getOrDefault("param")
+  , GET, "/hey/{param}/ya")
+mapper.map(proc (
+    req: Request,
+    headers : var StringTableRef,
+    args : RoutingArgs
+  ) : string {.gcsafe.} =
+    return "You visited " & req.url.path & " with arg " & args.pathArgs.getOrDefault("param")
+  , GET, "/hey/{param}/there")
+mapper.map(proc (
+    req: Request,
+    headers : var StringTableRef,
+    args : RoutingArgs
+  ) : string {.gcsafe.} =
+    return "You visited " & req.url.path
+  , GET, "/you/*/feel/*/me")
+let s = epochTime()
 logger.log(lvlInfo, "****** Compressing routing tree ******")
 var routes = newRouter(mapper)
-printMappings(routes)
+let e = epochTime()
+echo "compression took ", (e - s), " seconds"
 #
 # Set up the dispatcher
 #

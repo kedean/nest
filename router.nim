@@ -415,105 +415,78 @@ proc printMappings*[H](router : Router[H]) {.gcsafe.} =
 #
 
 proc matchTree[H](
-  node : PatternNode[H],
+  head : PatternNode[H],
   path : string,
   headers : StringTableRef,
   pathIndex : int = 0,
-  scanningWildcard : bool = false,
-  scanningParameter : bool = false,
-  parameterBeingScanned : string = ""
+  pathArgs : StringTableRef = newStringTable()
 ) : RoutingResult[H] {.noSideEffect.} =
   ##
   ## Check whether the given path matches the given tree node starting from pathIndex
   ##
-  var pathArgs = newStringTable()
+  var node = head
   var pathIndex = pathIndex
-  var scanningWildcard = scanningWildcard
-  var scanningParameter = scanningParameter
-  var parameterBeingScanned = parameterBeingScanned
 
-  case node.kind:
-    of ptrnText:
-      if scanningWildcard or scanningParameter:
-        if not path.contains(node.value):
-          return RoutingResult[H](status:pathMatchNotFound)
-        else: #skip forward til end of wildcard/param, then past the encountered text
-          let paramEndIndex = path.find(node.value, pathIndex) - 1
-          if paramEndIndex < 0:
-            return RoutingResult[H](status:pathMatchNotFound)
+  block matching:
+    while pathIndex >= 0:
+      case node.kind:
+        of ptrnText:
+          if path.continuesWith(node.value, pathIndex):
+            pathIndex += node.value.len()
           else:
-            if scanningParameter:
-              pathArgs[parameterBeingScanned] = path.substr(pathIndex, paramEndIndex)
-            pathIndex = paramEndIndex + node.value.len() + 1
-            scanningWildcard = false
-            scanningParameter = false
-      else:
-        if path.continuesWith(node.value, pathIndex):
-          pathIndex += node.value.len()
-        else:
-          return RoutingResult[H](status:pathMatchNotFound)
-    of ptrnWildcard:
-      assert(not scanningWildcard and not scanningParameter)
-      scanningWildcard = true
-    of ptrnParam:
-      assert(not scanningWildcard and not scanningParameter)
-      scanningParameter = true
-      parameterBeingScanned = node.value
-    of ptrnStartHeaderConstraint:
-      for child in node.children:
-        let childResult = child.matchTree(
-          path=headers.getOrDefault(node.headerName),
-          pathIndex=0,
-          headers=headers
-        )
+            break matching
+        of ptrnWildcard:
+          pathIndex = path.find(pathSeparator, pathIndex) #skip forward to the next separator
+        of ptrnParam:
+          let newPathIndex = path.find(pathSeparator, pathIndex) #skip forward to the next separator
+          pathArgs[node.value] = path.substr(pathIndex, newPathIndex - 1)
+          pathIndex = newPathIndex
+        of ptrnStartHeaderConstraint:
+          # for child in node.children:
+          #   let childResult = child.matchTree(
+          #     path=headers.getOrDefault(node.headerName),
+          #     pathIndex=0,
+          #     headers=headers
+          #   )
+          #
+          #   if childResult.status == pathMatchFound:
+          #     for key, value in childResult.arguments.pathArgs:
+          #       pathArgs[key] = value
+          #     return RoutingResult[H](
+          #       status:pathMatchFound,
+          #       handler:childResult.handler,
+          #       arguments:RoutingArgs(pathArgs:pathArgs)
+          #     )
+          # return RoutingResult[H](status:pathMatchNotFound)
+          discard
+        of ptrnEndHeaderConstraint:
+          # if node.isTerminator and node.isLeaf:
+          #   return RoutingResult[H](
+          #     status:pathMatchFound,
+          #     handler:node.handler,
+          #     arguments:RoutingArgs(pathArgs:pathArgs)
+          #   )
+          discard
 
-        if childResult.status == pathMatchFound:
-          for key, value in childResult.arguments.pathArgs:
-            pathArgs[key] = value
-          return RoutingResult[H](
-            status:pathMatchFound,
-            handler:childResult.handler,
-            arguments:RoutingArgs(pathArgs:pathArgs)
-          )
-      return RoutingResult[H](status:pathMatchNotFound)
-    of ptrnEndHeaderConstraint:
-      if node.isTerminator and node.isLeaf:
+      if pathIndex == len(path) and node.isTerminator: #the path was exhausted and we reached a node that has a handler
         return RoutingResult[H](
           status:pathMatchFound,
           handler:node.handler,
           arguments:RoutingArgs(pathArgs:pathArgs)
         )
+      elif not node.isLeaf: #there is children remaining, could match against children
+        if node.children.len() == 1: #optimization for single child that just points the node forward
+          node = node.children[0]
+        else: #more than one child
+          assert node.children.len() != 0
+          for child in node.children:
+            result = child.matchTree(path, headers, pathIndex, pathArgs)
+            if result.status == pathMatchFound:
+              return;
+      else: #its a leaf and we havent' satisfied the path yet, let the last line handle returning
+        break matching
 
-  if pathIndex == len(path) and node.isTerminator:
-    return RoutingResult[H](
-      status:pathMatchFound,
-      handler:node.handler,
-      arguments:RoutingArgs(pathArgs:pathArgs)
-    )
-#  elif pathIndex == len(path) and not node.isTerminator:
-#    return RoutingResult[H](status:pathMatchNotFound)
-  elif node.isLeaf:
-    return RoutingResult[H](status:pathMatchNotFound)
-  else:
-    for child in node.children:
-      let childResult = child.matchTree(
-        path=path,
-        headers=headers,
-        pathIndex=pathIndex,
-        scanningWildcard=scanningWildcard,
-        scanningParameter=scanningParameter,
-        parameterBeingScanned=parameterBeingScanned
-      )
-
-      if childResult.status == pathMatchFound:
-        for key, value in childResult.arguments.pathArgs:
-          pathArgs[key] = value
-        return RoutingResult[H](
-          status:pathMatchFound,
-          handler:childResult.handler,
-          arguments:RoutingArgs(pathArgs:pathArgs)
-        )
-    return RoutingResult[H](status:pathMatchNotFound)
+  result = RoutingResult[H](status:pathMatchNotFound)
 
 proc route*[H](
   router : Router[H],
