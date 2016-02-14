@@ -18,7 +18,6 @@ const specialSectionStartChars = {pathSeparator, wildcard, startParam}
 const allowedCharsInPattern = allowedCharsInUrl + {wildcard, startParam, endParam}
 
 type
-
   HttpVerb* = enum
     GET = "get"
     HEAD = "head"
@@ -43,16 +42,6 @@ type
         discard
       of ptrnStartHeaderConstraint:
         headerName : string
-  MapperRope[H] = tuple
-    pattern : seq[MapperKnot]
-    handler : H
-
-  MapperBundle[H] = ref object
-    ropes : seq[MapperRope[H]]
-
-  Mapper*[H] = ref object
-    mappings : CritBitTree[MapperBundle[H]]
-    logger : Logger
 
   # Structures for holding fully parsed mappings
   PatternNode[H] = ref object
@@ -85,25 +74,22 @@ type
     bodyArgs* : StringTableRef
 
   RoutingResultType* = enum
-    pathMatchFound
-    pathMatchNotFound
-    pathMatchError
+    routingSuccess
+    routingFailure
   RoutingResult*[H] = object
     case status* : RoutingResultType:
-      of pathMatchFound:
+      of routingSuccess:
         handler* : H
         arguments* : RoutingArgs
-      of pathMatchNotFound:
+      of routingFailure:
         discard
-      of pathMatchError:
-        cause : ref Exception
 
   # Exceptions
   RoutingError = object of Exception
   MappingError = object of Exception
 
 #
-# Stringification
+# Stringification / other operators
 #
 proc `$`(piece : MapperKnot) : string =
   case piece.kind:
@@ -122,35 +108,57 @@ proc `$`[H](node : PatternNode[H]) : string =
     of ptrnStartHeaderConstraint:
       result = $(node.kind) & ":" & node.headerName & ", "
   result = result & "leaf=" & $node.isLeaf & ", terminator=" & $node.isTerminator
+proc `==`[H](node : PatternNode[H], knot : MapperKnot) : bool =
+  result = (node.kind == knot.kind)
+
+  if (result):
+    case node.kind:
+      of ptrnText: #note that ptrnParam is not here, because two param matchers are equivalent even if they aren't named the same thing
+        result = (node.value == knot.value)
+      of ptrnStartHeaderConstraint:
+        result = (node.headerName == knot.headerName)
+      else:
+        discard
+
+#
+# Debugging routines
+#
+
+proc printRoutingTree[H](node : PatternNode[H], tabs : int = 0) =
+  debugEcho ' '.repeat(tabs), $node
+  if not node.isLeaf:
+    for child in node.children:
+      printRoutingTree(child, tabs + 1)
+
+proc printMappings*[H](router : Router[H]) {.gcsafe.} =
+  for verb, tree in pairs(router.methodRouters):
+    debugEcho verb.toUpper()
+    printRoutingTree(tree)
 
 #
 # Constructors
 #
-proc newMapper*[H](logger : Logger = newConsoleLogger()) : Mapper[H] =
-  return Mapper[H](
-    mappings : CritBitTree[MapperBundle[H]](),
-    logger: logger
-  )
+proc newRouter*[H](logger : Logger = newConsoleLogger()) : Router[H] =
+  result = Router[H](methodRouters:CritBitTree[PatternNode[H]](), logger:logger)
 
 #
-# Procedures to add initial mappings
+# Rope procedures. A rope is a chain of tokens representing the url
 #
 
 proc ensureCorrectRoute(
   path : string
 ) : string {.noSideEffect, raises:[MappingError].} =
-  if(not pattern.allCharsInSet(allowedCharsInPattern)):
+  if(not path.allCharsInSet(allowedCharsInPattern)):
     raise newException(MappingError, "Illegal characters occurred in the mapped pattern, please restrict to alphanumerics, or the following: - . _ ~ /")
 
   #if a url ends in a forward slash, we discard it and consider the matcher the same as without it
   let pathLen = path.len
-
-  if path[pathLen - 1] == pathSeparator: #patterns should not end in a separator, it's redundant
-    path = substr(0, pathLen - 1)
-  if not (path[0] == '/'): #ensure each pattern is relative to root
-    path.insert("/")
-
   result = path
+
+  if result[^1] == pathSeparator: #patterns should not end in a separator, it's redundant
+    result = result[0..^2]
+  if not (result[0] == '/'): #ensure each pattern is relative to root
+    result.insert("/")
 
 proc emptyKnotSequence(
   knotSeq : seq[MapperKnot]
@@ -207,67 +215,105 @@ proc generateRope(
     for i, c in pairs(token):
       result[i] = MapperKnot(kind:ptrnText, value:($c))
 
+#
+# Node procedures. A pattern node represents part of a chain representing a matchable path
+#
+
 proc terminatingPatternNode[H](
   oldNode : PatternNode[H],
-  knot : MapperKnot
+  knot : MapperKnot,
+  handler : H
 ) : PatternNode[H] {.noSideEffect, raises: [MappingError].} =
   if oldNode.isTerminator: # Already mapped
     raise newException(MappingError, "Duplicate mapping detected")
   case knot.kind:
     of ptrnText, ptrnParam:
-      result = PatternNode[H](kind: knot.kind, value: knot.value, isLeaf: isLeaf, isTerminator: true, handler: rope.handler)
+      result = PatternNode[H](kind: knot.kind, value: knot.value, isLeaf: oldNode.isLeaf, isTerminator: true, handler: handler)
     of ptrnWildcard, ptrnEndHeaderConstraint:
-      result = PatternNode[H](kind: knot.kind, isLeaf: isLeaf, isTerminator: true, handler: rope.handler)
+      result = PatternNode[H](kind: knot.kind, isLeaf: oldNode.isLeaf, isTerminator: true, handler: handler)
     of ptrnStartHeaderConstraint:
-      result = PatternNode[H](kind: knot.kind, headerName: knot.headerName, isLeaf: isLeaf, isTerminator: true, handler: rope.handler)
+      result = PatternNode[H](kind: knot.kind, headerName: knot.headerName, isLeaf: oldNode.isLeaf, isTerminator: true, handler: handler)
 
-  if result.isLeaf:
+  result.handler = handler
+
+  if not result.isLeaf:
     result.children = oldNode.children
 
-proc leafyPatternNode[H](
+proc parentalPatternNode[H](
   oldNode : PatternNode[H]
 ) : PatternNode[H] {.noSideEffect.} =
-  case knot.kind:
+  case oldNode.kind:
     of ptrnText, ptrnParam:
-      result = PatternNode[H](kind: oldNode.kind, value: oldNode.value, isLeaf: true, isTerminator: oldNode.isTerminator)
+      result = PatternNode[H](kind: oldNode.kind, value: oldNode.value, isLeaf: false, children: newSeq[PatternNode[H]](), isTerminator: oldNode.isTerminator)
     of ptrnWildcard, ptrnEndHeaderConstraint:
-      result = PatternNode[H](kind: oldNode.kind, isLeaf: isLeaf, isTerminator: oldNode.isTerminator)
+      result = PatternNode[H](kind: oldNode.kind, isLeaf: false, children: newSeq[PatternNode[H]](), isTerminator: oldNode.isTerminator)
     of ptrnStartHeaderConstraint:
-      result = PatternNode[H](kind: oldNode.kind, headerName: oldNode.headerName, isLeaf: true, isTerminator: oldNode.isTerminator)
+      result = PatternNode[H](kind: oldNode.kind, headerName: oldNode.headerName, isLeaf: false, children: newSeq[PatternNode[H]](), isTerminator: oldNode.isTerminator)
 
   if result.isTerminator:
     result.handler = oldNode.handler
 
-proc indexOf[H](
-  knotSet : MapperRope[H]
-  knot : MapperKnot
-) : PatternNode[H] =
-  for index, child in pairs(knotSet):
-    if $child == $knot:
+proc indexOf[H](nodes : seq[PatternNode[H]], knot : MapperKnot) : int =
+  ##
+  ## Finds the index of nodes that matches the given knot. If none is found, returns -1
+  ##
+  for index, child in pairs(nodes):
+    if child == knot:
       return index
+  return -1 #the 'not found' value
 
-proc grow[H](
-  node : PatternNode[H],
-  rope : MapperRope,
-  handler : H,
-  ropeIndex : Natural = 1
-) : PatternNode[H] {.noSideEffect, raises: [MappingError].} =
-  if rope.len - 1 == ropeIndex: # Terminating knot reached, finish the merge
-    result = terminatingPatternNode(node, rope[ropeIndex])
+proc chainTree[H](rope : seq[MapperKnot], handler : H) : PatternNode[H] =
+  ##
+  ## Creates a tree made up of single-child nodes that matches the given rope. The last node in the tree is a terminator with the given handler.
+  ##
+  let knot = rope[0]
+  let lastKnot = (rope.len == 1) #since this is a chain tree, the only leaf node is the terminator node, so they are mutually linked, if this is true then it is both
+
+  case knot.kind:
+    of ptrnText, ptrnParam:
+      result = PatternNode[H](kind: knot.kind, value: knot.value, isLeaf: lastKnot, isTerminator: lastKnot)
+    of ptrnWildcard, ptrnEndHeaderConstraint:
+      result = PatternNode[H](kind: knot.kind, isLeaf: lastKnot, isTerminator: lastKnot)
+    of ptrnStartHeaderConstraint:
+      result = PatternNode[H](kind: knot.kind, headerName: knot.headerName, isLeaf: lastKnot, isTerminator: lastKnot)
+
+  if lastKnot:
+    result.handler = handler
   else:
-    let currentKnot = rope[ropeIndex]
-    let nextKnot = rope[ropeIndex + 1]
+    result.children = @[chainTree(rope[1.. ^1], handler)] #continue the chain
 
-    # TODO: assertion that node == currentKnot
+proc merge[H](
+  node : PatternNode[H],
+  rope : seq[MapperKnot],
+  handler : H
+) : PatternNode[H] {.noSideEffect, raises: [MappingError].} =
+  ##
+  ## Merges the given sequence of MapperKnots into the given tree as a new mapping. This does not mutate the given node, instead it will return a new one
+  ##
+  if rope.len == 1: # Terminating knot reached, finish the merge
+    result = terminatingPatternNode(node, rope[0], handler)
+  else:
+    let currentKnot = rope[0]
+    let nextKnot = rope[1]
+    let remainder = rope[1.. ^1]
+
+    assert node == currentKnot
 
     var childIndex = -1
-    if not node.isLeaf: #node isn't a leaf yet, make it one to continue the process
-      result = leafyPatternNode(node)
+    if node.isLeaf: #node isn't a parent yet, make it one to continue the process
+      result = parentalPatternNode(node)
     else:
+      result = node
       childIndex = node.children.indexOf(nextKnot)
 
-    
+    if childIndex == -1: # the next knot doesn't map to a child of this node, needs to me directly translated into a deep tree (one branch per level)
+      result.children.add(chainTree(remainder, handler)) # make a node containing everything remaining and inject it
+    else:
+      result.children[childIndex] = merge(result.children[childIndex], remainder, handler)
 
+#
+# Mapping procedures
+#
 
 proc map*[H](
   router : Router[H],
@@ -275,7 +321,7 @@ proc map*[H](
   verb: HttpVerb,
   pattern : string,
   headers : StringTableRef = newStringTable()
-) {.noSideEffect, raises: [MappingError].} =
+) {.noSideEffect.} =
   ##
   ## Add a new mapping to the given router instance
   ##
@@ -287,16 +333,13 @@ proc map*[H](
       rope = concat(rope, generateRope(value))
       rope.add(MapperKnot(kind:ptrnEndHeaderConstraint))
 
-  var tree : PatternNode[H]
-  try:
-    tree = router.methodRouters[verb]
-  except KeyError:
-    tree = PatternNode[H](kind:ptrnText, value:pathSeparator, isLeaf:false, isTerminator:false)
-    router.methodRouters[$verb] = tree
+  if router.methodRouters.hasKey($verb):
+    let oldNode = router.methodRouters[$verb]
+    router.methodRouters[$verb] = oldNode.merge(rope, handler)
+  else:
+    let blank = PatternNode[H](kind:ptrnText, value:($pathSeparator), isLeaf:true, isTerminator:false)
+    router.methodRouters[$verb] = blank.merge(rope, handler)
 
-  tree.grow(rope, handler)
-
-  #TODO: ensure the path does not conflict with an existing one
   router.logger.log(lvlInfo, "Created ", $verb, " mapping for '", pattern, "'")
 
 #
@@ -342,92 +385,8 @@ proc trimPath(path : string) : string {.noSideEffect.} =
   result = path
 
 #
-# Compression routines, compression makes matching more efficient, and it must be done before routing
+# Compression routines, compression makes matching more efficient. Once compressed, a router is immutable
 #
-
-proc knotToNode[H](rope : MapperRope[H], index : int, isLeaf : bool, isTerminator : bool) : PatternNode[H] {.noSideEffect.} =
-  let knot = rope.pattern[index]
-
-  case knot.kind:
-    of ptrnText, ptrnParam:
-      if isTerminator:
-        result = PatternNode[H](kind: knot.kind, value: knot.value, isLeaf: isLeaf, isTerminator: true, handler: rope.handler)
-      else:
-        result = PatternNode[H](kind: knot.kind, value: knot.value, isLeaf: isLeaf, isTerminator: false)
-    of ptrnWildcard, ptrnEndHeaderConstraint:
-      if isTerminator:
-        result = PatternNode[H](kind: knot.kind, isLeaf: isLeaf, isTerminator: true, handler: rope.handler)
-      else:
-        result = PatternNode[H](kind: knot.kind, isLeaf: isLeaf, isTerminator: false)
-    of ptrnStartHeaderConstraint:
-      if isTerminator:
-        result = PatternNode[H](kind: knot.kind, headerName: knot.headerName, isLeaf: isLeaf, isTerminator: true, handler: rope.handler)
-      else:
-        result = PatternNode[H](kind: knot.kind, headerName: knot.headerName, isLeaf: isLeaf, isTerminator: false)
-
-
-proc group[H](matchers : seq[MapperRope[H]], prefixCriteria : string = $(@[MapperKnot(kind:ptrnText, value:($pathSeparator))]), knotIndex : int = 0) : PatternNode[H] {.gcsafe.} =
-  ##
-  ## Create a node containing each knot that has the given criteria at the given knot index
-  ##
-
-  var critMatchIndices = newSeq[int]() # each entry indicates which element of matchers was matched with the criteria
-
-  for matcherIndex, matcher in matchers.pairs():
-    if len(matcher.pattern) > knotIndex: #we can only check this index of the matching sequence if its within the boundaries!
-      let subseq = matcher.pattern[0..knotIndex]
-      if $subseq == prefixCriteria:
-        critMatchIndices.add(matcherIndex)
-
-  case len(critMatchIndices):
-    of 0: # should never happen
-      raise newException(MappingError, "Invalid grouping state reached")
-    of 1:
-      let pattern = matchers[critMatchIndices[0]].pattern
-
-      if len(pattern) - 1 == knotIndex: #this is the last knot in the rope
-        result = knotToNode(rope = matchers[critMatchIndices[0]], index = knotIndex, isLeaf = true, isTerminator = true)
-      else: #keep going!
-        result = knotToNode(
-          rope = matchers[critMatchIndices[0]],
-          index = knotIndex,
-          isLeaf = false,
-          isTerminator = false
-        )
-
-        result.children = @[matchers.group($pattern[0..knotIndex+1], knotIndex + 1)]
-
-    else:
-      var terminatorRope : MapperRope[H]
-      var terminatorRopeFound = false
-      var knotsChecked = newSeq[string]()
-      var children = newSeq[PatternNode[H]]()
-
-      for matcherIndex in critMatchIndices:
-        let pattern = matchers[matcherIndex].pattern
-
-        if len(pattern) - 1 == knotIndex: #last node in the given sequence, this can only happen up to one time per critMatchIndices set
-          assert terminatorRopeFound == false
-          terminatorRope = matchers[matcherIndex]
-          terminatorRopeFound = true
-        else:
-          let nextKnot = $pattern[knotIndex+1]
-          if not knotsChecked.contains(nextKnot): #only have to do this one time
-            knotsChecked.add(nextKnot)
-            children.add(matchers.group($(pattern[0..knotIndex+1]), knotIndex + 1))
-
-      if terminatorRopeFound:
-        result = knotToNode(rope = terminatorRope, index = knotIndex, isLeaf = false, isTerminator = true)
-      else:
-        result = knotToNode(
-          rope = matchers[critMatchIndices[0]], #does not matter which one we choose, ever matcher indicated by critMatchIndices should be identical if its not a terminator
-          index = knotIndex,
-          isLeaf = false,
-          isTerminator = false
-        )
-
-      result.children = children
-
 proc compress[H](node : PatternNode[H]) : PatternNode[H] =
   ##
   ## Finds sequences of single ptrnText nodes and combines them to reduce the depth of the tree
@@ -444,42 +403,12 @@ proc compress[H](node : PatternNode[H]) : PatternNode[H] =
   result = node
   result.children = map(result.children, compress)
 
-proc newRouter*[H](mapper : Mapper[H]) : Router[H] =
-  var methodRouters = CritBitTree[PatternNode[H]]()
-  for key, bundle in pairs(mapper.mappings):
-    methodRouters[key] = bundle.ropes.group().compress()
-  result = Router[H](methodRouters:methodRouters, logger:mapper.logger)
-
-proc newRouter*[H](logger : Logger = newConsoleLogger()) : Router[H] =
-  result = Router[H](methodRouter:CritBitTree[PatternNode[H]](), logger:logger)
-
-#
-# Debugging routines
-#
-
-proc printRoutingRope*[H](matchers : seq[MapperRope[H]]) =
-  for matcher in matchers.items():
-    for index, piece in matcher.pattern.pairs():
-      if index != 0:
-        write(stdout, " -> ")
-      write(stdout, $piece)
-    echo "\n"
-
-proc printRoutingTree[H](node : PatternNode[H], tabs : int = 0) =
-  echo ' '.repeat(tabs), $node
-  if not node.isLeaf:
-    for child in node.children:
-      printRoutingTree(child, tabs + 1)
-
-proc printMappings*[H](mapper : Mapper[H]) {.gcsafe.} =
-  for verb, bundle in pairs(mapper.mappings):
-    echo verb.toUpper()
-    printRoutingRope(bundle.ropes)
-proc printMappings*[H](router : Router[H]) {.gcsafe.} =
-  for verb, tree in pairs(router.methodRouters):
-    echo verb.toUpper()
-    printRoutingTree(tree)
-
+proc compress*[H](router : Router[H]) =
+  ##
+  ## Compresses the entire contents of the given router. Successive calls will recompress, but may not be efficient, so use this only when you are done mapping.
+  ##
+  for index, existing in pairs(router.methodRouters):
+    router.methodRouters[index] = compress(existing)
 
 #
 # Procedures to match against paths
@@ -520,26 +449,26 @@ proc matchTree[H](
               headers=headers
             )
 
-            if childResult.status == pathMatchFound:
+            if childResult.status == routingSuccess:
               for key, value in childResult.arguments.pathArgs:
                 pathArgs[key] = value
               return RoutingResult[H](
-                status:pathMatchFound,
+                status:routingSuccess,
                 handler:childResult.handler,
                 arguments:RoutingArgs(pathArgs:pathArgs)
               )
-          return RoutingResult[H](status:pathMatchNotFound)
+          return RoutingResult[H](status:routingFailure)
         of ptrnEndHeaderConstraint:
           if node.isTerminator and node.isLeaf:
             return RoutingResult[H](
-              status:pathMatchFound,
+              status:routingSuccess,
               handler:node.handler,
               arguments:RoutingArgs(pathArgs:pathArgs)
             )
 
       if pathIndex == len(path) and node.isTerminator: #the path was exhausted and we reached a node that has a handler
         return RoutingResult[H](
-          status:pathMatchFound,
+          status:routingSuccess,
           handler:node.handler,
           arguments:RoutingArgs(pathArgs:pathArgs)
         )
@@ -550,12 +479,13 @@ proc matchTree[H](
           assert node.children.len() != 0
           for child in node.children:
             result = child.matchTree(path, headers, pathIndex, pathArgs)
-            if result.status == pathMatchFound:
+            if result.status == routingSuccess:
               return;
+          break matching #none of the children matched, assume no match
       else: #its a leaf and we havent' satisfied the path yet, let the last line handle returning
         break matching
 
-  result = RoutingResult[H](status:pathMatchNotFound)
+  result = RoutingResult[H](status:routingFailure)
 
 proc route*[H](
   router : Router[H],
@@ -563,23 +493,17 @@ proc route*[H](
   requestUrl : URI,
   requestHeaders : StringTableRef,
   requestBody : string
-) : RoutingResult[H] {.gcsafe.} =
+) : RoutingResult[H] {.noSideEffect.} =
   ##
   ## Find a mapping that matches the given request, and execute it's associated handler
   ##
-  let logger = router.logger
+  let verb = requestMethod.toLower()
 
-  try:
-    let verb = requestMethod.toLower()
+  if router.methodRouters.hasKey(verb):
+    result = matchTree(router.methodRouters[verb], trimPath(requestUrl.path), requestHeaders)
 
-    if router.methodRouters.hasKey(verb):
-      result = matchTree(router.methodRouters[verb], trimPath(requestUrl.path), requestHeaders)
-
-      if result.status == pathMatchFound:
-        result.arguments.queryArgs = extractEncodedParams(requestUrl.query)
-        result.arguments.bodyArgs = extractFormBody(requestBody, requestHeaders.getOrDefault("Content-Type"))
-    else:
-      result = RoutingResult[H](status:pathMatchNotFound)
-  except:
-    logger.log(lvlError, "Internal error occured:\n\t", getCurrentExceptionMsg())
-    result = RoutingResult[H](status:pathMatchError, cause:getCurrentException())
+    if result.status == routingSuccess:
+      result.arguments.queryArgs = extractEncodedParams(requestUrl.query)
+      result.arguments.bodyArgs = extractFormBody(requestBody, requestHeaders.getOrDefault("Content-Type"))
+  else:
+    result = RoutingResult[H](status:routingFailure)
