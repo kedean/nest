@@ -20,52 +20,31 @@ logger.log(lvlInfo, "****** Created server on ", getTime(), " ******")
 #
 # Set up mappings
 #
-var mapper = newMapper[RequestHandler](logger)
+var mapper = newRouter[RequestHandler](logger)
 
-mapper.map(proc (
-    req: Request,
-    headers : var StringTableRef,
-    args : RoutingArgs
-  ) : string {.gcsafe.} =
-    return "You visited " & req.url.path
+mapper.map(
+  proc (req: Request, headers : var StringTableRef, args : RoutingArgs) : string {.gcsafe.} = return "You visited " & req.url.path
   , GET, "/")
-mapper.map(proc (
-    req: Request,
-    headers : var StringTableRef,
-    args : RoutingArgs
-  ) : string {.gcsafe.} =
+mapper.map(proc (req: Request, headers : var StringTableRef, args : RoutingArgs) : string {.gcsafe.} =
     return "You visited " & req.url.path & ". This page requires you visit via localhost!"
   , GET, "/foo/bar", newStringTable("Host", "localhost", modeCaseInsensitive))
-mapper.map(proc (
-    req: Request,
-    headers : var StringTableRef,
-    args : RoutingArgs
-  ) : string {.gcsafe.} =
+mapper.map(proc (req: Request, headers : var StringTableRef, args : RoutingArgs) : string {.gcsafe.} =
     return "You visited " & req.url.path & " with arg " & args.pathArgs.getOrDefault("param")
   , GET, "/hey/{param}/ya")
-mapper.map(proc (
-    req: Request,
-    headers : var StringTableRef,
-    args : RoutingArgs
-  ) : string {.gcsafe.} =
+mapper.map(proc (req: Request, headers : var StringTableRef, args : RoutingArgs) : string {.gcsafe.} =
     return "You visited " & req.url.path & " with arg " & args.pathArgs.getOrDefault("param")
   , GET, "/hey/{param}/there")
-mapper.map(proc (
-    req: Request,
-    headers : var StringTableRef,
-    args : RoutingArgs
-  ) : string {.gcsafe.} =
+mapper.map(proc (req: Request, headers : var StringTableRef, args : RoutingArgs) : string {.gcsafe.} =
     return "You visited " & req.url.path
-  , GET, "/you/*/feel/*/me")
-let s = epochTime()
+  , GET, "/x/{param}")
+
 logger.log(lvlInfo, "****** Compressing routing tree ******")
-var routes = newRouter(mapper)
-let e = epochTime()
-echo "compression took ", (e - s), " seconds"
+mapper.compress()
+mapper.printMappings()
 #
 # Set up the dispatcher
 #
-let routerPtr = addr routes
+let routerPtr = addr mapper
 
 proc dispatch(req: Request) {.async, gcsafe.} =
   ##
@@ -76,10 +55,8 @@ proc dispatch(req: Request) {.async, gcsafe.} =
   let endT = epochTime()
   echo "routing took ", ((endT - startT) * 1000), " millis"
 
-  if matchingResult.status == pathMatchNotFound:
+  if matchingResult.status == routingFailure:
     await req.respond(Http404, "Resource not found")
-  elif matchingResult.status == pathMatchError:
-    await req.respond(Http500, "Internal server error")
   else:
     var
       statusCode : HttpCode
@@ -89,6 +66,7 @@ proc dispatch(req: Request) {.async, gcsafe.} =
       content = matchingResult.handler(req, headers, matchingResult.arguments)
       statusCode = Http200
     except:
+      logger.log(lvlError, "Internal error occured:\n\t", getCurrentExceptionMsg())
       content = "Internal server error"
       statusCode = Http500
 
