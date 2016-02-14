@@ -135,6 +135,23 @@ proc newMapper*[H](logger : Logger = newConsoleLogger()) : Mapper[H] =
 #
 # Procedures to add initial mappings
 #
+
+proc ensureCorrectRoute(
+  path : string
+) : string {.noSideEffect, raises:[MappingError].} =
+  if(not pattern.allCharsInSet(allowedCharsInPattern)):
+    raise newException(MappingError, "Illegal characters occurred in the mapped pattern, please restrict to alphanumerics, or the following: - . _ ~ /")
+
+  #if a url ends in a forward slash, we discard it and consider the matcher the same as without it
+  let pathLen = path.len
+
+  if path[pathLen - 1] == pathSeparator: #patterns should not end in a separator, it's redundant
+    path = substr(0, pathLen - 1)
+  if not (path[0] == '/'): #ensure each pattern is relative to root
+    path.insert("/")
+
+  result = path
+
 proc emptyKnotSequence(
   knotSeq : seq[MapperKnot]
 ) : bool {.noSideEffect.} =
@@ -190,46 +207,97 @@ proc generateRope(
     for i, c in pairs(token):
       result[i] = MapperKnot(kind:ptrnText, value:($c))
 
+proc terminatingPatternNode[H](
+  oldNode : PatternNode[H],
+  knot : MapperKnot
+) : PatternNode[H] {.noSideEffect, raises: [MappingError].} =
+  if oldNode.isTerminator: # Already mapped
+    raise newException(MappingError, "Duplicate mapping detected")
+  case knot.kind:
+    of ptrnText, ptrnParam:
+      result = PatternNode[H](kind: knot.kind, value: knot.value, isLeaf: isLeaf, isTerminator: true, handler: rope.handler)
+    of ptrnWildcard, ptrnEndHeaderConstraint:
+      result = PatternNode[H](kind: knot.kind, isLeaf: isLeaf, isTerminator: true, handler: rope.handler)
+    of ptrnStartHeaderConstraint:
+      result = PatternNode[H](kind: knot.kind, headerName: knot.headerName, isLeaf: isLeaf, isTerminator: true, handler: rope.handler)
+
+  if result.isLeaf:
+    result.children = oldNode.children
+
+proc leafyPatternNode[H](
+  oldNode : PatternNode[H]
+) : PatternNode[H] {.noSideEffect.} =
+  case knot.kind:
+    of ptrnText, ptrnParam:
+      result = PatternNode[H](kind: oldNode.kind, value: oldNode.value, isLeaf: true, isTerminator: oldNode.isTerminator)
+    of ptrnWildcard, ptrnEndHeaderConstraint:
+      result = PatternNode[H](kind: oldNode.kind, isLeaf: isLeaf, isTerminator: oldNode.isTerminator)
+    of ptrnStartHeaderConstraint:
+      result = PatternNode[H](kind: oldNode.kind, headerName: oldNode.headerName, isLeaf: true, isTerminator: oldNode.isTerminator)
+
+  if result.isTerminator:
+    result.handler = oldNode.handler
+
+proc indexOf[H](
+  knotSet : MapperRope[H]
+  knot : MapperKnot
+) : PatternNode[H] =
+  for index, child in pairs(knotSet):
+    if $child == $knot:
+      return index
+
+proc grow[H](
+  node : PatternNode[H],
+  rope : MapperRope,
+  handler : H,
+  ropeIndex : Natural = 1
+) : PatternNode[H] {.noSideEffect, raises: [MappingError].} =
+  if rope.len - 1 == ropeIndex: # Terminating knot reached, finish the merge
+    result = terminatingPatternNode(node, rope[ropeIndex])
+  else:
+    let currentKnot = rope[ropeIndex]
+    let nextKnot = rope[ropeIndex + 1]
+
+    # TODO: assertion that node == currentKnot
+
+    var childIndex = -1
+    if not node.isLeaf: #node isn't a leaf yet, make it one to continue the process
+      result = leafyPatternNode(node)
+    else:
+      childIndex = node.children.indexOf(nextKnot)
+
+    
+
+
 proc map*[H](
-  mapper : Mapper[H],
+  router : Router[H],
   handler : H,
   verb: HttpVerb,
   pattern : string,
   headers : StringTableRef = newStringTable()
-) {.gcsafe.} =
+) {.noSideEffect, raises: [MappingError].} =
   ##
-  ## Add a new mapping to the given mapper instance
+  ## Add a new mapping to the given router instance
   ##
+  var rope = generateRope(ensureCorrectRoute(pattern)) # initial rope
 
-  if(not pattern.allCharsInSet(allowedCharsInPattern)):
-    raise newException(MappingError, "Illegal characters occurred in the mapped pattern, please restrict to alphanumerics, or the following: - . _ ~ /")
-
-  #if a url ends in a forward slash, we discard it and consider the matcher the same as without it
-  var pattern = pattern
-  pattern.removeSuffix('/')
-
-  if not (pattern[0] == '/'): #ensure each pattern is relative to root
-    pattern.insert("/")
-
-  var bundle : MapperBundle[H]
-  try:
-    bundle = mapper.mappings[$verb]
-  except KeyError:
-    bundle = MapperBundle[H](ropes:newSeq[MapperRope[H]]())
-    mapper.mappings[$verb] = bundle
-
-  var rope = generateRope(pattern)
-
-  if headers != nil:
+  if headers != nil: # extend the rope with any header constraints
     for key, value in headers:
       rope.add(MapperKnot(kind:ptrnStartHeaderConstraint, headerName:key))
       rope = concat(rope, generateRope(value))
       rope.add(MapperKnot(kind:ptrnEndHeaderConstraint))
 
-  bundle.ropes.add((pattern:rope, handler:handler))
+  var tree : PatternNode[H]
+  try:
+    tree = router.methodRouters[verb]
+  except KeyError:
+    tree = PatternNode[H](kind:ptrnText, value:pathSeparator, isLeaf:false, isTerminator:false)
+    router.methodRouters[$verb] = tree
+
+  tree.grow(rope, handler)
 
   #TODO: ensure the path does not conflict with an existing one
-  mapper.logger.log(lvlInfo, "Created ", $verb, " mapping for '", pattern, "'")
+  router.logger.log(lvlInfo, "Created ", $verb, " mapping for '", pattern, "'")
 
 #
 # Data extractors and utilities
@@ -381,6 +449,9 @@ proc newRouter*[H](mapper : Mapper[H]) : Router[H] =
   for key, bundle in pairs(mapper.mappings):
     methodRouters[key] = bundle.ropes.group().compress()
   result = Router[H](methodRouters:methodRouters, logger:mapper.logger)
+
+proc newRouter*[H](logger : Logger = newConsoleLogger()) : Router[H] =
+  result = Router[H](methodRouter:CritBitTree[PatternNode[H]](), logger:logger)
 
 #
 # Debugging routines
