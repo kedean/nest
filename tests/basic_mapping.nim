@@ -10,6 +10,27 @@ suite "Mappings":
     let result = r.route("GET", parseUri("/"))
     check(result.handler == testHandler)
 
+  test "Multiple mappings with a root":
+    let r = newRouter[proc()]()
+    r.map(testHandler, GET, "/")
+    r.map(testHandler, GET, "/foo/bar")
+    r.map(testHandler, GET, "/baz")
+    let result1 = r.route("GET", parseUri("/"))
+    check(result1.handler == testHandler)
+    let result2 = r.route("GET", parseUri("/foo/bar"))
+    check(result2.handler == testHandler)
+    let result3 = r.route("GET", parseUri("/baz"))
+    check(result3.handler == testHandler)
+
+  test "Multiple mappings without a root":
+    let r = newRouter[proc()]()
+    r.map(testHandler, GET, "/foo/bar")
+    r.map(testHandler, GET, "/baz")
+    let result1 = r.route("GET", parseUri("/foo/bar"))
+    check(result1.handler == testHandler)
+    let result2 = r.route("GET", parseUri("/baz"))
+    check(result2.handler == testHandler)
+
   test "Duplicate root":
     let r = newRouter[proc()]()
     r.map(testHandler, GET, "/")

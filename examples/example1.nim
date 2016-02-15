@@ -25,22 +25,10 @@ var mapper = newRouter[RequestHandler](logger)
 mapper.map(
   proc (req: Request, headers : var StringTableRef, args : RoutingArgs) : string {.gcsafe.} = return "You visited " & req.url.path
   , GET, "/")
-mapper.map(proc (req: Request, headers : var StringTableRef, args : RoutingArgs) : string {.gcsafe.} =
-    return "You visited " & req.url.path & ". This page requires you visit via localhost!"
-  , GET, "/foo/bar", newStringTable("Host", "localhost", modeCaseInsensitive))
-mapper.map(proc (req: Request, headers : var StringTableRef, args : RoutingArgs) : string {.gcsafe.} =
-    return "You visited " & req.url.path & " with arg " & args.pathArgs.getOrDefault("param")
-  , GET, "/hey/{param}/ya")
-mapper.map(proc (req: Request, headers : var StringTableRef, args : RoutingArgs) : string {.gcsafe.} =
-    return "You visited " & req.url.path & " with arg " & args.pathArgs.getOrDefault("param")
-  , GET, "/hey/{param}/there")
-mapper.map(proc (req: Request, headers : var StringTableRef, args : RoutingArgs) : string {.gcsafe.} =
-    return "You visited " & req.url.path
-  , GET, "/x/{param}")
-
+  
 logger.log(lvlInfo, "****** Compressing routing tree ******")
 mapper.compress()
-mapper.printMappings()
+
 #
 # Set up the dispatcher
 #
@@ -53,7 +41,7 @@ proc dispatch(req: Request) {.async, gcsafe.} =
   let startT = epochTime()
   let matchingResult = routerPtr[].route(req.reqMethod, req.url, req.headers, req.body)
   let endT = epochTime()
-  echo "routing took ", ((endT - startT) * 1000), " millis"
+  logger.log(lvlDebug, "Routing took ", ((endT - startT) * 1000), " millis")
 
   if matchingResult.status == routingFailure:
     await req.respond(Http404, "Resource not found")

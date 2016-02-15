@@ -339,7 +339,7 @@ proc contains[H](
       result = true
     else:
       result = false
-
+      
   #are possible children equivalent?
   if not node.isLeaf and result:
     if node.children.len > 0:
@@ -348,6 +348,8 @@ proc contains[H](
         if child.contains(rope[1.. ^1]): #does the child match the rest of the rope?
           result = true
           break
+  elif node.isLeaf and rope.len > 1: #the node is a leaf but we want to map further to it, so it won't conflict
+    result = false
 
 #
 # Mapping procedures
@@ -375,7 +377,7 @@ proc map*[H](
   if router.methodRouters.hasKey($verb):
     nodeToBeMerged = router.methodRouters[$verb]
     if nodeToBeMerged.contains(rope):
-      raise newException(MappingError, "Duplicate mapping encountered")
+      raise newException(MappingError, "Duplicate mapping encountered: " & pattern)
   else:
     nodeToBeMerged = PatternNode[H](kind:ptrnText, value:($pathSeparator), isLeaf:true, isTerminator:false)
 
