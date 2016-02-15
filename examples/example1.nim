@@ -13,7 +13,7 @@ type
 #
 # Initialization
 #
-let logger = newConsoleLogger()
+var logger = newConsoleLogger()
 let server = newAsyncHttpServer()
 logger.log(lvlInfo, "****** Created server on ", getTime(), " ******")
 
@@ -25,14 +25,17 @@ var mapper = newRouter[RequestHandler](logger)
 mapper.map(
   proc (req: Request, headers : var StringTableRef, args : RoutingArgs) : string {.gcsafe.} = return "You visited " & req.url.path
   , GET, "/")
-  
+
 logger.log(lvlInfo, "****** Compressing routing tree ******")
 mapper.compress()
 
 #
 # Set up the dispatcher
 #
+
+# NOTE: these only use unsafe pointers to work with asynchttpserver, which requires full gcsafety in thread mode
 let routerPtr = addr mapper
+let loggerPtr = addr logger
 
 proc dispatch(req: Request) {.async, gcsafe.} =
   ##
@@ -41,7 +44,7 @@ proc dispatch(req: Request) {.async, gcsafe.} =
   let startT = epochTime()
   let matchingResult = routerPtr[].route(req.reqMethod, req.url, req.headers, req.body)
   let endT = epochTime()
-  logger.log(lvlDebug, "Routing took ", ((endT - startT) * 1000), " millis")
+  loggerPtr[].log(lvlDebug, "Routing took ", ((endT - startT) * 1000), " millis")
 
   if matchingResult.status == routingFailure:
     await req.respond(Http404, "Resource not found")
@@ -54,7 +57,7 @@ proc dispatch(req: Request) {.async, gcsafe.} =
       content = matchingResult.handler(req, headers, matchingResult.arguments)
       statusCode = Http200
     except:
-      logger.log(lvlError, "Internal error occured:\n\t", getCurrentExceptionMsg())
+      loggerPtr[].log(lvlError, "Internal error occured:\n\t", getCurrentExceptionMsg())
       content = "Internal server error"
       statusCode = Http500
 

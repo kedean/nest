@@ -339,7 +339,7 @@ proc contains[H](
       result = true
     else:
       result = false
-      
+
   #are possible children equivalent?
   if not node.isLeaf and result:
     if node.children.len > 0:
