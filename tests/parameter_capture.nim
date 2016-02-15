@@ -1,5 +1,5 @@
 import unittest, uri
-import router
+import nest
 
 suite "Parameter Capture":
   proc testHandler() = echo "test"

@@ -1,7 +1,7 @@
 ##
 ## Example of Nest extremely simple custom handlers. Nest makes no restrictions on the handler itself.
 ##
-import router
+import nest
 import asynchttpserver, asyncdispatch
 
 #

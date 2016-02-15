@@ -2,7 +2,7 @@
 ## Example of Nest that tracks how long routing takes
 ##
 
-import router
+import nest
 
 import logging
 import asynchttpserver, strtabs, times, asyncdispatch, math

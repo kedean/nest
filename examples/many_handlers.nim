@@ -2,7 +2,7 @@
 ## Example of Nest using a huge number of request handlers (10k)
 ##
 
-import router
+import nest
 import asynchttpserver, strtabs, times, asyncdispatch, math, logging
 
 type

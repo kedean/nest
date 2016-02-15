@@ -45,7 +45,7 @@ type
 
   # Structures for holding fully parsed mappings
   PatternNode[H] = ref object
-    case kind : PatternMatchingType: # TODO: should be able to extend MapperKnot to get this, compiled wont let me, investigate further
+    case kind : PatternMatchingType: # TODO: should be able to extend MapperKnot to get this, compiler wont let me, investigate further. Nim compiler bug maybe?
       of ptrnParam, ptrnText:
         value : string
       of ptrnWildcard, ptrnEndHeaderConstraint:
@@ -65,7 +65,7 @@ type
 
   # Router Structures
   Router*[H] = ref object
-    methodRouters : CritBitTree[PatternNode[H]]
+    verbTrees : CritBitTree[PatternNode[H]]
     logger : Logger
 
   RoutingArgs* = object
@@ -130,7 +130,7 @@ proc printRoutingTree[H](node : PatternNode[H], tabs : int = 0) =
       printRoutingTree(child, tabs + 1)
 
 proc printMappings*[H](router : Router[H]) {.gcsafe.} =
-  for verb, tree in pairs(router.methodRouters):
+  for verb, tree in pairs(router.verbTrees):
     debugEcho verb.toUpper()
     printRoutingTree(tree)
 
@@ -138,7 +138,7 @@ proc printMappings*[H](router : Router[H]) {.gcsafe.} =
 # Constructors
 #
 proc newRouter*[H](logger : Logger = newConsoleLogger()) : Router[H] =
-  result = Router[H](methodRouters:CritBitTree[PatternNode[H]](), logger:logger)
+  result = Router[H](verbTrees:CritBitTree[PatternNode[H]](), logger:logger)
 
 #
 # Rope procedures. A rope is a chain of tokens representing the url
@@ -150,8 +150,6 @@ proc ensureCorrectRoute(
   if(not path.allCharsInSet(allowedCharsInPattern)):
     raise newException(MappingError, "Illegal characters occurred in the mapped pattern, please restrict to alphanumerics, or the following: - . _ ~ /")
 
-  #if a url ends in a forward slash, we discard it and consider the matcher the same as without it
-  let pathLen = path.len
   result = path
 
   if result[^1] == pathSeparator: #patterns should not end in a separator, it's redundant
@@ -373,14 +371,14 @@ proc map*[H](
       rope.add(MapperKnot(kind:ptrnEndHeaderConstraint))
 
   var nodeToBeMerged : PatternNode[H]
-  if router.methodRouters.hasKey($verb):
-    nodeToBeMerged = router.methodRouters[$verb]
+  if router.verbTrees.hasKey($verb):
+    nodeToBeMerged = router.verbTrees[$verb]
     if nodeToBeMerged.contains(rope):
       raise newException(MappingError, "Duplicate mapping encountered: " & pattern)
   else:
     nodeToBeMerged = PatternNode[H](kind:ptrnText, value:($pathSeparator), isLeaf:true, isTerminator:false)
 
-  router.methodRouters[$verb] = nodeToBeMerged.merge(rope, handler)
+  router.verbTrees[$verb] = nodeToBeMerged.merge(rope, handler)
 
   router.logger.log(lvlInfo, "Created ", $verb, " mapping for '", pattern, "'")
 
@@ -438,8 +436,8 @@ proc compress*[H](router : Router[H]) =
   ##
   ## Compresses the entire contents of the given router. Successive calls will recompress, but may not be efficient, so use this only when you are done mapping.
   ##
-  for index, existing in pairs(router.methodRouters):
-    router.methodRouters[index] = compress(existing)
+  for index, existing in pairs(router.verbTrees):
+    router.verbTrees[index] = compress(existing)
 
 #
 # Procedures to match against paths
@@ -536,8 +534,8 @@ proc route*[H](
   let verb = requestMethod.toLower()
   router.logger.log(lvlDebug, "Routing against path => ", requestUri.path)
 
-  if router.methodRouters.hasKey(verb):
-    result = matchTree(router.methodRouters[verb], trimPath(requestUri.path), requestHeaders)
+  if router.verbTrees.hasKey(verb):
+    result = matchTree(router.verbTrees[verb], trimPath(requestUri.path), requestHeaders)
 
     if result.status == routingSuccess:
       result.arguments.queryArgs = extractEncodedParams(requestUri.query)
