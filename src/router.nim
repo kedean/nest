@@ -71,7 +71,6 @@ type
   RoutingArgs* = object
     pathArgs* : StringTableRef
     queryArgs* : StringTableRef
-    bodyArgs* : StringTableRef
 
   RoutingResultType* = enum
     routingSuccess
@@ -410,17 +409,6 @@ proc extractEncodedParams(input : string) : StringTableRef {.noSideEffect.} =
 
   return result
 
-const FORM_URL_ENCODED = "application/x-www-form-urlencoded"
-const FORM_MULTIPART_DATA = "multipart/form-data"
-
-proc extractFormBody(body : string, contentType : string) : StringTableRef {.noSideEffect.} =
-  if contentType.startsWith(FORM_URL_ENCODED):
-    return body.extractEncodedParams()
-  elif contentType.startsWith(FORM_MULTIPART_DATA):
-    assert(false, "Multipart form data not yet supported")
-  else:
-    return newStringTable()
-
 proc trimPath(path : string) : string {.noSideEffect.} =
   var path = path
   if path != "/": #the root string is special
@@ -541,7 +529,6 @@ proc route*[H](
   requestMethod : string,
   requestUri : URI,
   requestHeaders : StringTableRef = newStringTable(),
-  requestBody : string = ""
 ) : RoutingResult[H] {.noSideEffect.} =
   ##
   ## Find a mapping that matches the given request, and execute it's associated handler
@@ -554,6 +541,5 @@ proc route*[H](
 
     if result.status == routingSuccess:
       result.arguments.queryArgs = extractEncodedParams(requestUri.query)
-      result.arguments.bodyArgs = extractFormBody(requestBody, requestHeaders.getOrDefault("Content-Type"))
   else:
     result = RoutingResult[H](status:routingFailure)

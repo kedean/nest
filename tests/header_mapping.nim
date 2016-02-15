@@ -1,7 +1,7 @@
 import unittest, uri
 import router
 
-suite "Mappings":
+suite "Header Mapping":
   proc testHandler() = echo "test"
 
   test "Root with content-type header":

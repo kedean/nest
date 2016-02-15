@@ -1,7 +1,7 @@
 import unittest, uri
 import router
 
-suite "Mappings":
+suite "Basic Mapping":
   proc testHandler() = echo "test"
 
   test "Root":
