@@ -8,7 +8,7 @@ import URI
 export URI, strtabs
 
 #
-#Type Declarations
+# Type Declarations
 #
 
 const pathSeparator = '/'
@@ -164,7 +164,7 @@ proc emptyKnotSequence(
   knotSeq : seq[MapperKnot]
 ) : bool {.noSideEffect.} =
   ## A knot sequence is empty if it A) contains no elements or B) it contains a single text element with no value
-  result = len(knotSeq) == 0 or (len(knotSeq) == 1 and knotSeq[0].kind == ptrnText and knotSeq[0].value == "")
+  result = (knotSeq.len == 0 or (knotSeq.len == 1 and knotSeq[0].kind == ptrnText and knotSeq[0].value == ""))
 
 proc generateRope(
   pattern : string,
@@ -175,7 +175,7 @@ proc generateRope(
   let tokenSize = pattern.parseUntil(token, specialSectionStartChars, startIndex)
   var newStartIndex = startIndex + tokenSize
 
-  if newStartIndex < pattern.len(): # we encountered a wildcard or parameter def, there could be more left
+  if newStartIndex < pattern.len: # we encountered a wildcard or parameter def, there could be more left
     let specialChar = pattern[newStartIndex]
     newStartIndex += 1
 
@@ -207,7 +207,7 @@ proc generateRope(
       return concat(prefix, suffix)
 
   else: #no more wildcards or parameter defs, the rest is static text
-    result = newSeq[MapperKnot](len(token))
+    result = newSeq[MapperKnot](token.len)
     for i, c in pairs(token):
       result[i] = MapperKnot(kind:ptrnText, value:($c))
 
@@ -219,7 +219,7 @@ proc terminatingPatternNode[H](
   oldNode : PatternNode[H],
   knot : MapperKnot,
   handler : H
-) : PatternNode[H] {.noSideEffect, raises: [MappingError].} =
+) : PatternNode[H] {.raises: [MappingError].} =
   ## Turns the given node into a terminating node ending at the given knot/handler pair. If it is already a terminator, throws an exception
   if oldNode.isTerminator: # Already mapped
     raise newException(MappingError, "Duplicate mapping detected")
@@ -236,9 +236,7 @@ proc terminatingPatternNode[H](
   if not result.isLeaf:
     result.children = oldNode.children
 
-proc parentalPatternNode[H](
-  oldNode : PatternNode[H]
-) : PatternNode[H] {.noSideEffect.} =
+proc parentalPatternNode[H](oldNode : PatternNode[H]) : PatternNode[H] =
   ## Turns the given node into a parent node. If it not a leaf node, this returns a new copy of the input.
   case oldNode.kind:
     of ptrnText, ptrnParam:
@@ -306,11 +304,11 @@ proc merge[H](
 proc contains[H](
   node : PatternNode[H],
   rope : seq[MapperKnot]
-) : bool =
+) : bool {.noSideEffect.} =
   ## Determines whether or not merging rope into node will create a mapping conflict
   let knot = rope[0]
 
-  # is each equivalent?
+  # Is this node equal to the knot?
   if node.kind == knot.kind:
     if node.kind == ptrnText:
       result = (node.value == knot.value)
@@ -330,15 +328,14 @@ proc contains[H](
     else:
       result = false
 
-  # are possible children equivalent?
-  if not node.isLeaf and result:
+  if not node.isLeaf and result: # if the node has kids, is at least one qual?
     if node.children.len > 0:
-      result = false #false until proven otherwise
+      result = false # false until proven otherwise
       for child in node.children:
-        if child.contains(rope[1.. ^1]): #does the child match the rest of the rope?
+        if child.contains(rope[1.. ^1]): # does the child match the rest of the rope?
           result = true
           break
-  elif node.isLeaf and rope.len > 1: #the node is a leaf but we want to map further to it, so it won't conflict
+  elif node.isLeaf and rope.len > 1: # the node is a leaf but we want to map further to it, so it won't conflict
     result = false
 
 #
@@ -348,7 +345,7 @@ proc contains[H](
 proc map*[H](
   router : Router[H],
   handler : H,
-  verb: HttpVerb,
+  verb: string,
   pattern : string,
   headers : StringTableRef = newStringTable()
 ) {.noSideEffect.} =
@@ -362,16 +359,16 @@ proc map*[H](
       rope.add(MapperKnot(kind:ptrnEndHeaderConstraint))
 
   var nodeToBeMerged : PatternNode[H]
-  if router.verbTrees.hasKey($verb):
-    nodeToBeMerged = router.verbTrees[$verb]
+  if router.verbTrees.hasKey(verb):
+    nodeToBeMerged = router.verbTrees[verb]
     if nodeToBeMerged.contains(rope):
       raise newException(MappingError, "Duplicate mapping encountered: " & pattern)
   else:
     nodeToBeMerged = PatternNode[H](kind:ptrnText, value:($pathSeparator), isLeaf:true, isTerminator:false)
 
-  router.verbTrees[$verb] = nodeToBeMerged.merge(rope, handler)
+  router.verbTrees[verb] = nodeToBeMerged.merge(rope, handler)
 
-  router.logger.log(lvlInfo, "Created ", $verb, " mapping for '", pattern, "'")
+  router.logger.log(lvlInfo, "Created ", verb, " mapping for '", pattern, "'")
 
 #
 # Data extractors and utilities
@@ -381,7 +378,7 @@ proc extractEncodedParams(input : string) : StringTableRef {.noSideEffect.} =
   var index = 0
   result = newStringTable()
 
-  while index < input.len():
+  while index < input.len:
     var paramValuePair : string
     let pairSize = input.parseUntil(paramValuePair, '&', index)
 
@@ -392,8 +389,8 @@ proc extractEncodedParams(input : string) : StringTableRef {.noSideEffect.} =
     if equalIndex == -1: #no equals, just a boolean "existance" variable
       result[paramValuePair] = "" #just insert a record into the param table to indicate that it exists
     else: #is a 'setter' parameter
-      let paramName = paramValuePair.substr(0, equalIndex - 1)
-      let paramValue = paramValuePair.substr(equalIndex + 1)
+      let paramName = paramValuePair[0..equalIndex - 1]
+      let paramValue = paramValuePair[equalIndex + 1.. ^1]
       result[paramName] = paramValue
 
   return result
@@ -405,7 +402,7 @@ proc compress[H](node : PatternNode[H]) : PatternNode[H] =
   ## Finds sequences of single ptrnText nodes and combines them to reduce the depth of the tree
   if node.isLeaf: #if it's a leaf, there are clearly no descendents, and if it is a terminator then compression will alter the behavior
     return node
-  elif node.kind == ptrnText and not node.isTerminator and len(node.children) == 1:
+  elif node.kind == ptrnText and not node.isTerminator and node.children.len == 1:
     let compressedChild = compress(node.children[0])
     if compressedChild.kind == ptrnText:
       result = compressedChild
@@ -440,18 +437,18 @@ proc matchTree[H](
       case node.kind:
         of ptrnText:
           if path.continuesWith(node.value, pathIndex):
-            pathIndex += node.value.len()
+            pathIndex += node.value.len
           else:
             break matching
         of ptrnWildcard:
           pathIndex = path.find(pathSeparator, pathIndex) #skip forward to the next separator
           if pathIndex == -1:
-            pathIndex = len(path)
+            pathIndex = path.len
         of ptrnParam:
           let newPathIndex = path.find(pathSeparator, pathIndex) #skip forward to the next separator
           if newPathIndex == -1:
             pathArgs[node.value] = path[pathIndex.. ^1]
-            pathIndex = len(path)
+            pathIndex = path.len
           else:
             pathArgs[node.value] = path[pathIndex..newPathIndex - 1]
             pathIndex = newPathIndex
@@ -480,17 +477,17 @@ proc matchTree[H](
               arguments:RoutingArgs(pathArgs:pathArgs)
             )
 
-      if pathIndex == len(path) and node.isTerminator: #the path was exhausted and we reached a node that has a handler
+      if pathIndex == path.len and node.isTerminator: #the path was exhausted and we reached a node that has a handler
         return RoutingResult[H](
           status:routingSuccess,
           handler:node.handler,
           arguments:RoutingArgs(pathArgs:pathArgs)
         )
       elif not node.isLeaf: #there is children remaining, could match against children
-        if node.children.len() == 1: #optimization for single child that just points the node forward
+        if node.children.len == 1: #optimization for single child that just points the node forward
           node = node.children[0]
         else: #more than one child
-          assert node.children.len() != 0
+          assert node.children.len != 0
           for child in node.children:
             result = child.matchTree(path, headers, pathIndex, pathArgs)
             if result.status == routingSuccess:
@@ -508,8 +505,9 @@ proc route*[H](
   requestHeaders : StringTableRef = newStringTable(),
 ) : RoutingResult[H] {.noSideEffect.} =
   ## Find a mapping that matches the given request description
-  let verb = requestMethod.toLower()
+
   router.logger.log(lvlDebug, "Routing against path => ", requestUri.path)
+  let verb = requestMethod.toLower()
 
   if router.verbTrees.hasKey(verb):
     result = matchTree(router.verbTrees[verb], ensureCorrectRoute(requestUri.path), requestHeaders)

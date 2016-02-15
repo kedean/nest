@@ -28,7 +28,7 @@ var mapper = newRouter[RequestHandler](logger)
 
 mapper.map(
   proc (req: Request, headers : var StringTableRef, args : RoutingArgs) : string {.gcsafe.} = return "You visited " & req.url.path
-  , GET, "/")
+  , $GET, "/")
 
 mapper.compress()
 

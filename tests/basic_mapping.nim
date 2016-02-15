@@ -6,15 +6,15 @@ suite "Basic Mapping":
 
   test "Root":
     let r = newRouter[proc()]()
-    r.map(testHandler, GET, "/")
+    r.map(testHandler, $GET, "/")
     let result = r.route("GET", parseUri("/"))
     check(result.handler == testHandler)
 
   test "Multiple mappings with a root":
     let r = newRouter[proc()]()
-    r.map(testHandler, GET, "/")
-    r.map(testHandler, GET, "/foo/bar")
-    r.map(testHandler, GET, "/baz")
+    r.map(testHandler, $GET, "/")
+    r.map(testHandler, $GET, "/foo/bar")
+    r.map(testHandler, $GET, "/baz")
     let result1 = r.route("GET", parseUri("/"))
     check(result1.handler == testHandler)
     let result2 = r.route("GET", parseUri("/foo/bar"))
@@ -24,8 +24,8 @@ suite "Basic Mapping":
 
   test "Multiple mappings without a root":
     let r = newRouter[proc()]()
-    r.map(testHandler, GET, "/foo/bar")
-    r.map(testHandler, GET, "/baz")
+    r.map(testHandler, $GET, "/foo/bar")
+    r.map(testHandler, $GET, "/baz")
     let result1 = r.route("GET", parseUri("/foo/bar"))
     check(result1.handler == testHandler)
     let result2 = r.route("GET", parseUri("/baz"))
@@ -33,22 +33,22 @@ suite "Basic Mapping":
 
   test "Duplicate root":
     let r = newRouter[proc()]()
-    r.map(testHandler, GET, "/")
+    r.map(testHandler, $GET, "/")
     let result = r.route("GET", parseUri("/"))
     check(result.handler == testHandler)
     expect MappingError:
-      r.map(testHandler, GET, "/")
+      r.map(testHandler, $GET, "/")
 
   test "Ends with wildcard":
     let r = newRouter[proc()]()
-    r.map(testHandler, GET, "/*")
+    r.map(testHandler, $GET, "/*")
     let result = r.route("GET", parseUri("/wildcard1"))
     check(result.status == routingSuccess)
     check(result.handler == testHandler)
 
   test "Ends with param":
     let r = newRouter[proc()]()
-    r.map(testHandler, GET, "/{param1}")
+    r.map(testHandler, $GET, "/{param1}")
     let result = r.route("GET", parseUri("/value1"))
     check(result.status == routingSuccess)
     check(result.handler == testHandler)
@@ -56,14 +56,14 @@ suite "Basic Mapping":
 
   test "Wildcard in middle":
     let r = newRouter[proc()]()
-    r.map(testHandler, GET, "/*/test")
+    r.map(testHandler, $GET, "/*/test")
     let result = r.route("GET", parseUri("/wildcard1/test"))
     check(result.status == routingSuccess)
     check(result.handler == testHandler)
 
   test "Param in middle":
     let r = newRouter[proc()]()
-    r.map(testHandler, GET, "/{param1}/test")
+    r.map(testHandler, $GET, "/{param1}/test")
     let result = r.route("GET", parseUri("/value1/test"))
     check(result.status == routingSuccess)
     check(result.handler == testHandler)
@@ -71,7 +71,7 @@ suite "Basic Mapping":
 
   test "Param + wildcard":
     let r = newRouter[proc()]()
-    r.map(testHandler, GET, "/{param1}/*")
+    r.map(testHandler, $GET, "/{param1}/*")
     let result = r.route("GET", parseUri("/value1/test"))
     check(result.status == routingSuccess)
     check(result.handler == testHandler)
@@ -79,7 +79,7 @@ suite "Basic Mapping":
 
   test "Wildcard + param":
     let r = newRouter[proc()]()
-    r.map(testHandler, GET, "/*/{param1}")
+    r.map(testHandler, $GET, "/*/{param1}")
     let result = r.route("GET", parseUri("/somevalue/value1"))
     check(result.status == routingSuccess)
     check(result.handler == testHandler)
@@ -87,7 +87,7 @@ suite "Basic Mapping":
 
   test "Trailing slash has no effect":
     let r = newRouter[proc()]()
-    r.map(testHandler, GET, "/some/url/")
+    r.map(testHandler, $GET, "/some/url/")
     let result1 = r.route("GET", parseUri("/some/url"))
     check(result1.status == routingSuccess)
     let result2 = r.route("GET", parseUri("/some/url/"))
@@ -95,24 +95,24 @@ suite "Basic Mapping":
 
   test "Trailing slash doesn't make a unique mapping":
     let r = newRouter[proc()]()
-    r.map(testHandler, GET, "/some/url/")
+    r.map(testHandler, $GET, "/some/url/")
     expect MappingError:
-      r.map(testHandler, GET, "/some/url")
+      r.map(testHandler, $GET, "/some/url")
 
   test "Varying param names don't make a unique mapping":
     let r = newRouter[proc()]()
-    r.map(testHandler, GET, "/has/{paramA}")
+    r.map(testHandler, $GET, "/has/{paramA}")
     expect MappingError:
-      r.map(testHandler, GET, "/has/{paramB}")
+      r.map(testHandler, $GET, "/has/{paramB}")
 
   test "Param vs wildcard don't make a unique mapping":
     let r = newRouter[proc()]()
-    r.map(testHandler, GET, "/has/{param}")
+    r.map(testHandler, $GET, "/has/{param}")
     expect MappingError:
-      r.map(testHandler, GET, "/has/*")
+      r.map(testHandler, $GET, "/has/*")
 
   test "Wildcards only match one URL section":
     let r = newRouter[proc()]()
-    r.map(testHandler, GET, "/has/*/one")
+    r.map(testHandler, $GET, "/has/*/one")
     let result = r.route("GET", parseUri("/has/a/b/one"))
     check(result.status == routingFailure)

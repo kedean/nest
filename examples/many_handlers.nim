@@ -28,7 +28,7 @@ var mapper = newRouter[RequestHandler](logger)
 for i in 0..10000:
   mapper.map(
     proc (req: Request, headers : var StringTableRef, args : RoutingArgs) : string {.gcsafe.} = return "You visited " & req.url.path
-    , GET, "/" & ($i))
+    , $GET, "/" & ($i))
 
 mapper.compress()
 

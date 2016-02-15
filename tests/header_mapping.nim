@@ -6,7 +6,7 @@ suite "Header Mapping":
 
   test "Root with content-type header":
     let r = newRouter[proc()]()
-    r.map(testHandler, GET, "/", newStringTable("content-type", "text/plain", modeCaseInsensitive))
+    r.map(testHandler, $GET, "/", newStringTable("content-type", "text/plain", modeCaseInsensitive))
     let goodResult = r.route("GET", parseUri("/"), newStringTable("content-type", "text/plain", modeCaseInsensitive))
     check(goodResult.status == routingSuccess)
     let badResult = r.route("GET", parseUri("/"), newStringTable("content-type", "text/html", modeCaseInsensitive))
@@ -14,7 +14,7 @@ suite "Header Mapping":
 
   test "Parameterized with content-type header":
     let r = newRouter[proc()]()
-    r.map(testHandler, GET, "/test/{param1}", newStringTable("content-type", "text/plain", modeCaseInsensitive))
+    r.map(testHandler, $GET, "/test/{param1}", newStringTable("content-type", "text/plain", modeCaseInsensitive))
     let goodResult = r.route("GET", parseUri("/test/foo"), newStringTable("content-type", "text/plain", modeCaseInsensitive))
     check(goodResult.status == routingSuccess)
     let badResult = r.route("GET", parseUri("/test/foo"), newStringTable("content-type", "text/html", modeCaseInsensitive))
@@ -24,7 +24,7 @@ suite "Header Mapping":
     let r = newRouter[proc()]()
     r.map(
       testHandler,
-      GET,
+      $GET,
       "/",
       newStringTable(
         "host",
@@ -43,8 +43,8 @@ suite "Header Mapping":
 
   test "Header constraints don't conflict with other mappings":
     let r = newRouter[proc()]()
-    r.map(testHandler, GET, "/constrained", newStringTable("content-type", "text/plain", modeCaseInsensitive))
-    r.map(testHandler, GET, "/unconstrained")
+    r.map(testHandler, $GET, "/constrained", newStringTable("content-type", "text/plain", modeCaseInsensitive))
+    r.map(testHandler, $GET, "/unconstrained")
 
     let constrainedRouteWithHeader = r.route("GET", parseUri("/constrained"), newStringTable("content-type", "text/plain", modeCaseInsensitive))
     check(constrainedRouteWithHeader.status == routingSuccess)

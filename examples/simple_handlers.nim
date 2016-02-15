@@ -12,7 +12,7 @@ var mapper = newRouter[proc():string]()
 
 mapper.map(
   proc () : string {.gcsafe.} = return "Hello World!"
-  , GET, "/")
+  , $GET, "/")
 
 mapper.compress()
 
