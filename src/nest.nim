@@ -1,3 +1,5 @@
+## HTTP router based on routing trees
+
 import strutils, parseutils, strtabs, sequtils
 import logging
 import critbits
@@ -18,7 +20,7 @@ const specialSectionStartChars = {pathSeparator, wildcard, startParam}
 const allowedCharsInPattern = allowedCharsInUrl + {wildcard, startParam, endParam}
 
 type
-  HttpVerb* = enum
+  HttpVerb* = enum ## Available methods to associate a mapped handler with
     GET = "get"
     HEAD = "head"
     OPTIONS = "options"
@@ -26,7 +28,7 @@ type
     POST = "post"
     DELETE = "delete"
 
-  PatternMatchingType = enum
+  PatternMatchingType = enum ## Kinds of elements that may appear in a mapping
     ptrnWildcard
     ptrnParam
     ptrnText
@@ -34,7 +36,7 @@ type
     ptrnEndHeaderConstraint
 
   # Structures for setting up the mappings
-  MapperKnot = object
+  MapperKnot = object ## A token within a URL to be mapped. The URL is broken into 'knots' that make up a 'rope' (``seq[MapperKnot]``)
     case kind : PatternMatchingType:
       of ptrnParam, ptrnText:
         value : string
@@ -44,7 +46,7 @@ type
         headerName : string
 
   # Structures for holding fully parsed mappings
-  PatternNode[H] = ref object
+  PatternNode[H] = ref object ## A node within a routing tree, usually constructed from a ``MapperKnot``
     case kind : PatternMatchingType: # TODO: should be able to extend MapperKnot to get this, compiler wont let me, investigate further. Nim compiler bug maybe?
       of ptrnParam, ptrnText:
         value : string
@@ -64,18 +66,18 @@ type
         discard
 
   # Router Structures
-  Router*[H] = ref object
+  Router*[H] = ref object ## Container that holds HTTP mappings to handler procs
     verbTrees : CritBitTree[PatternNode[H]]
     logger : Logger
 
-  RoutingArgs* = object
+  RoutingArgs* = object ## Arguments extracted from a request while routing it
     pathArgs* : StringTableRef
     queryArgs* : StringTableRef
 
-  RoutingResultType* = enum
+  RoutingResultType* = enum ## Possible results of a routing operation
     routingSuccess
     routingFailure
-  RoutingResult*[H] = object
+  RoutingResult*[H] = object ## Encapsulates the results of a routing operation
     case status* : RoutingResultType:
       of routingSuccess:
         handler* : H
@@ -84,8 +86,7 @@ type
         discard
 
   # Exceptions
-  RoutingError* = object of Exception
-  MappingError* = object of Exception
+  MappingError* = object of Exception ## Indicates an error while creating a new mapping
 
 #
 # Stringification / other operators
@@ -129,7 +130,7 @@ proc printRoutingTree[H](node : PatternNode[H], tabs : int = 0) =
     for child in node.children:
       printRoutingTree(child, tabs + 1)
 
-proc printMappings*[H](router : Router[H]) {.gcsafe.} =
+proc printRoutingTree[H](router : Router[H]) =
   for verb, tree in pairs(router.verbTrees):
     debugEcho verb.toUpper()
     printRoutingTree(tree)
@@ -138,6 +139,7 @@ proc printMappings*[H](router : Router[H]) {.gcsafe.} =
 # Constructors
 #
 proc newRouter*[H](logger : Logger = newConsoleLogger()) : Router[H] =
+  ## Creates a new ``Router`` instance
   result = Router[H](verbTrees:CritBitTree[PatternNode[H]](), logger:logger)
 
 #
@@ -147,6 +149,7 @@ proc newRouter*[H](logger : Logger = newConsoleLogger()) : Router[H] =
 proc ensureCorrectRoute(
   path : string
 ) : string {.noSideEffect, raises:[MappingError].} =
+  ## Verifies that this given path is a valid path, strips trailing slashes, and guarantees leading slashes
   if(not path.allCharsInSet(allowedCharsInPattern)):
     raise newException(MappingError, "Illegal characters occurred in the mapped pattern, please restrict to alphanumerics, or the following: - . _ ~ /")
 
@@ -160,18 +163,14 @@ proc ensureCorrectRoute(
 proc emptyKnotSequence(
   knotSeq : seq[MapperKnot]
 ) : bool {.noSideEffect.} =
-  ##
   ## A knot sequence is empty if it A) contains no elements or B) it contains a single text element with no value
-  ##
   result = len(knotSeq) == 0 or (len(knotSeq) == 1 and knotSeq[0].kind == ptrnText and knotSeq[0].value == "")
 
 proc generateRope(
   pattern : string,
   startIndex : int = 0
 ) : seq[MapperKnot] {.noSideEffect, raises: [MappingError].} =
-  ##
   ## Translates the string form of a pattern into a sequence of MapperKnot objects to be parsed against
-  ##
   var token : string
   let tokenSize = pattern.parseUntil(token, specialSectionStartChars, startIndex)
   var newStartIndex = startIndex + tokenSize
@@ -221,6 +220,7 @@ proc terminatingPatternNode[H](
   knot : MapperKnot,
   handler : H
 ) : PatternNode[H] {.noSideEffect, raises: [MappingError].} =
+  ## Turns the given node into a terminating node ending at the given knot/handler pair. If it is already a terminator, throws an exception
   if oldNode.isTerminator: # Already mapped
     raise newException(MappingError, "Duplicate mapping detected")
   case knot.kind:
@@ -239,6 +239,7 @@ proc terminatingPatternNode[H](
 proc parentalPatternNode[H](
   oldNode : PatternNode[H]
 ) : PatternNode[H] {.noSideEffect.} =
+  ## Turns the given node into a parent node. If it not a leaf node, this returns a new copy of the input.
   case oldNode.kind:
     of ptrnText, ptrnParam:
       result = PatternNode[H](kind: oldNode.kind, value: oldNode.value, isLeaf: false, children: newSeq[PatternNode[H]](), isTerminator: oldNode.isTerminator)
@@ -251,18 +252,14 @@ proc parentalPatternNode[H](
     result.handler = oldNode.handler
 
 proc indexOf[H](nodes : seq[PatternNode[H]], knot : MapperKnot) : int =
-  ##
   ## Finds the index of nodes that matches the given knot. If none is found, returns -1
-  ##
   for index, child in pairs(nodes):
     if child == knot:
       return index
   return -1 #the 'not found' value
 
 proc chainTree[H](rope : seq[MapperKnot], handler : H) : PatternNode[H] =
-  ##
   ## Creates a tree made up of single-child nodes that matches the given rope. The last node in the tree is a terminator with the given handler.
-  ##
   let knot = rope[0]
   let lastKnot = (rope.len == 1) #since this is a chain tree, the only leaf node is the terminator node, so they are mutually linked, if this is true then it is both
 
@@ -284,9 +281,7 @@ proc merge[H](
   rope : seq[MapperKnot],
   handler : H
 ) : PatternNode[H] {.noSideEffect, raises: [MappingError].} =
-  ##
   ## Merges the given sequence of MapperKnots into the given tree as a new mapping. This does not mutate the given node, instead it will return a new one
-  ##
   if rope.len == 1: # Terminating knot reached, finish the merge
     result = terminatingPatternNode(node, rope[0], handler)
   else:
@@ -312,12 +307,10 @@ proc contains[H](
   node : PatternNode[H],
   rope : seq[MapperKnot]
 ) : bool =
-  ##
   ## Determines whether or not merging rope into node will create a mapping conflict
-  ##
   let knot = rope[0]
 
-  #are each equivalent?
+  # is each equivalent?
   if node.kind == knot.kind:
     if node.kind == ptrnText:
       result = (node.value == knot.value)
@@ -337,7 +330,7 @@ proc contains[H](
     else:
       result = false
 
-  #are possible children equivalent?
+  # are possible children equivalent?
   if not node.isLeaf and result:
     if node.children.len > 0:
       result = false #false until proven otherwise
@@ -359,9 +352,7 @@ proc map*[H](
   pattern : string,
   headers : StringTableRef = newStringTable()
 ) {.noSideEffect.} =
-  ##
-  ## Add a new mapping to the given router instance
-  ##
+  ## Add a new mapping to the given ``Router`` instance
   var rope = generateRope(ensureCorrectRoute(pattern)) # initial rope
 
   if headers != nil: # extend the rope with any header constraints
@@ -407,19 +398,11 @@ proc extractEncodedParams(input : string) : StringTableRef {.noSideEffect.} =
 
   return result
 
-proc trimPath(path : string) : string {.noSideEffect.} =
-  var path = path
-  if path != "/": #the root string is special
-    path.removeSuffix('/') #trailing slashes are considered redundant
-  result = path
-
 #
 # Compression routines, compression makes matching more efficient. Once compressed, a router is immutable
 #
 proc compress[H](node : PatternNode[H]) : PatternNode[H] =
-  ##
   ## Finds sequences of single ptrnText nodes and combines them to reduce the depth of the tree
-  ##
   if node.isLeaf: #if it's a leaf, there are clearly no descendents, and if it is a terminator then compression will alter the behavior
     return node
   elif node.kind == ptrnText and not node.isTerminator and len(node.children) == 1:
@@ -433,9 +416,7 @@ proc compress[H](node : PatternNode[H]) : PatternNode[H] =
   result.children = map(result.children, compress)
 
 proc compress*[H](router : Router[H]) =
-  ##
-  ## Compresses the entire contents of the given router. Successive calls will recompress, but may not be efficient, so use this only when you are done mapping.
-  ##
+  ## Compresses the entire contents of the given ``Router``. Successive calls will recompress, but may not be efficient, so use this only when mapping is complete for the best effect
   for index, existing in pairs(router.verbTrees):
     router.verbTrees[index] = compress(existing)
 
@@ -450,9 +431,7 @@ proc matchTree[H](
   pathIndex : int = 0,
   pathArgs : StringTableRef = newStringTable()
 ) : RoutingResult[H] {.noSideEffect.} =
-  ##
   ## Check whether the given path matches the given tree node starting from pathIndex
-  ##
   var node = head
   var pathIndex = pathIndex
 
@@ -528,14 +507,12 @@ proc route*[H](
   requestUri : URI,
   requestHeaders : StringTableRef = newStringTable(),
 ) : RoutingResult[H] {.noSideEffect.} =
-  ##
-  ## Find a mapping that matches the given request, and execute it's associated handler
-  ##
+  ## Find a mapping that matches the given request description
   let verb = requestMethod.toLower()
   router.logger.log(lvlDebug, "Routing against path => ", requestUri.path)
 
   if router.verbTrees.hasKey(verb):
-    result = matchTree(router.verbTrees[verb], trimPath(requestUri.path), requestHeaders)
+    result = matchTree(router.verbTrees[verb], ensureCorrectRoute(requestUri.path), requestHeaders)
 
     if result.status == routingSuccess:
       result.arguments.queryArgs = extractEncodedParams(requestUri.query)
