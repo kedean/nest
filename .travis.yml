@@ -42,3 +42,10 @@ cache:
   directories:
     - nim-master
     - nim-devel
+
+notifications:
+  email:
+    recipients:
+      - kevin.e.dean@gmail.com
+    on_success: never
+    on_failure: change
