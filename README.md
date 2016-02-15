@@ -1,10 +1,12 @@
+[![Build Status](https://travis-ci.org/kedean/nest.svg?branch=master)](https://travis-ci.org/kedean/nest)
+
 # Nest
 RESTful routing with Nim!
 
 ## Intro
 Nest is a high performance URL mapper/router built in Nim.
 
-At the moment, Nest needs a lot of work and is *definitely* not ready for production. Feedback is appreciated!
+At the moment, Nest needs a work and is not ready for production. Feedback is appreciated moving forward!
 
 ## Usage
 See examples/ for example usage. Note that using this against Nim's built in asynchttpserver is not required, and it is just used for the examples.
@@ -12,9 +14,9 @@ See examples/ for example usage. Note that using this against Nim's built in asy
 ## Compilation
 To run the example code, use the following invocation:
 ```nim
-nim c --path:./ --threads:on -r examples/example1.nim
+nim c -r examples/example1.nim
 ```
-Threads do not need to be enabled, this just shows that they can be.
+Threads are not required for nest to run, but the examples use threads (in nim.cfg) to prove that they can be used.
 
 ## Features
 - Map against any HTTP method and path
@@ -31,4 +33,3 @@ Threads do not need to be enabled, this just shows that they can be.
 - Improve body parameter capture (JSON support?)
 - More documentation!
 - Guarantee thread safety
-- Performance improvements
