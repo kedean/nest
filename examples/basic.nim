@@ -1,3 +1,7 @@
+##
+## Example of Nest that tracks how long routing takes
+##
+
 import router
 
 import logging
@@ -26,7 +30,6 @@ mapper.map(
   proc (req: Request, headers : var StringTableRef, args : RoutingArgs) : string {.gcsafe.} = return "You visited " & req.url.path
   , GET, "/")
 
-logger.log(lvlInfo, "****** Compressing routing tree ******")
 mapper.compress()
 
 #
