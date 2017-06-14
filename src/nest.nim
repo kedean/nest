@@ -1,6 +1,6 @@
 ## HTTP router based on routing trees
 
-import strutils, parseutils, strtabs, sequtils
+import strutils, parseutils, strtabs, sequtils, httpcore
 import critbits
 import URI
 
@@ -357,13 +357,13 @@ proc map*[H](
   handler : H,
   verb: string,
   pattern : string,
-  headers : StringTableRef = newStringTable()
+  headers : HttpHeaders = nil
 ) {.noSideEffect.} =
   ## Add a new mapping to the given ``Router`` instance
   var rope = generateRope(ensureCorrectRoute(pattern)) # initial rope
 
-  if headers != nil: # extend the rope with any header constraints
-    for key, value in headers:
+  if not headers.isNil: # extend the rope with any header constraints
+    for key, value in pairs(headers):
       rope.add(MapperKnot(kind:ptrnStartHeaderConstraint, headerName:key))
       rope = concat(rope, generateRope(value))
       rope.add(MapperKnot(kind:ptrnEndHeaderConstraint))
@@ -401,8 +401,6 @@ proc extractEncodedParams(input : string) : StringTableRef {.noSideEffect.} =
       let paramValue = paramValuePair[equalIndex + 1.. ^1]
       result[paramName] = paramValue
 
-  return result
-
 #
 # Compression routines, compression makes matching more efficient. Once compressed, a router is immutable
 #
@@ -432,7 +430,7 @@ proc compress*[H](router : Router[H]) =
 proc matchTree[H](
   head : PatternNode[H],
   path : string,
-  headers : StringTableRef,
+  headers : HttpHeaders,
   pathIndex : int = 0,
   pathArgs : StringTableRef = newStringTable()
 ) : RoutingResult[H] {.noSideEffect.} =
@@ -462,8 +460,11 @@ proc matchTree[H](
             pathIndex = newPathIndex
         of ptrnStartHeaderConstraint:
           for child in node.children:
+            var p = ""
+            if not headers.isNil:
+              p = toString(headers.getOrDefault(node.headerName))
             let childResult = child.matchTree(
-              path=headers.getOrDefault(node.headerName),
+              path=p,
               pathIndex=0,
               headers=headers
             )
@@ -499,7 +500,7 @@ proc matchTree[H](
           for child in node.children:
             result = child.matchTree(path, headers, pathIndex, pathArgs)
             if result.status == routingSuccess:
-              return;
+              return
           break matching #none of the children matched, assume no match
       else: #its a leaf and we havent' satisfied the path yet, let the last line handle returning
         break matching
@@ -510,7 +511,7 @@ proc route*[H](
   router : Router[H],
   requestMethod : string,
   requestUri : URI,
-  requestHeaders : StringTableRef = newStringTable(),
+  requestHeaders : HttpHeaders = newHttpHeaders(),
 ) : RoutingResult[H] {.noSideEffect.} =
   ## Find a mapping that matches the given request description
 

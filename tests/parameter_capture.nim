@@ -1,4 +1,4 @@
-import unittest, uri
+import unittest, uri, httpcore
 import nest
 
 suite "Parameter Capture":
@@ -33,8 +33,8 @@ suite "Parameter Capture":
 
   test "Query param plus headers":
     let r = newRouter[proc()]()
-    r.map(testHandler, $GET, "/", newStringTable("content-type", "text/plain", modeCaseInsensitive))
-    let result = r.route("GET", parseUri("/?param1=value1"), newStringTable("content-type", "text/plain", modeCaseInsensitive))
+    r.map(testHandler, $GET, "/", newHttpHeaders({"content-type": "text/plain"}))
+    let result = r.route("GET", parseUri("/?param1=value1"), newHttpHeaders({"content-type": "text/plain"}))
     check(result.status == routingSuccess)
     check(result.arguments.queryArgs.hasKey("param1"))
     check(result.arguments.queryArgs["param1"] == "value1")
