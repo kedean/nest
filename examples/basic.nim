@@ -6,11 +6,12 @@ import nest
 
 import logging
 import asynchttpserver, strtabs, times, asyncdispatch, math
+import httpcore
 
 type
   RequestHandler* = proc (
     req: Request,
-    headers : var StringTableRef,
+    headers : var HttpHeaders,
     args : RoutingArgs
   ) : string {.gcsafe.}
 
@@ -24,10 +25,10 @@ logger.log(lvlInfo, "****** Created server on ", getTime(), " ******")
 #
 # Set up mappings
 #
-var mapper = newRouter[RequestHandler](logger)
+var mapper = newRouter[RequestHandler]()
 
 mapper.map(
-  proc (req: Request, headers : var StringTableRef, args : RoutingArgs) : string {.gcsafe.} = return "You visited " & req.url.path
+  proc (req: Request, headers : var HttpHeaders, args : RoutingArgs) : string {.gcsafe.} = return "You visited " & req.url.path
   , $GET, "/")
 
 mapper.compress()
@@ -54,7 +55,7 @@ proc dispatch(req: Request) {.async, gcsafe.} =
   else:
     var
       statusCode : HttpCode
-      headers = newStringTable()
+      headers = newHttpHeaders()
       content : string
     try:
       content = matchingResult.handler(req, headers, matchingResult.arguments)
