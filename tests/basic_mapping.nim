@@ -116,3 +116,9 @@ suite "Basic Mapping":
     r.map(testHandler, $GET, "/has/*/one")
     let result = r.route("GET", parseUri("/has/a/b/one"))
     check(result.status == routingFailure)
+
+  test "Invalid characters in URL":
+    let r = newRouter[proc()]()
+    r.map(testHandler, $GET, "/test/{param}")
+    let result = r.route("GET", parseUri("/test/$dollar"))
+    check(result.status == routingFailure)

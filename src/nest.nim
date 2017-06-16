@@ -15,6 +15,7 @@ const allowedCharsInUrl = {'a'..'z', 'A'..'Z', '0'..'9', '-', '.', '_', '~', pat
 const wildcard = '*'
 const startParam = '{'
 const endParam = '}'
+const fullPathIndicator = '$'
 const specialSectionStartChars = {pathSeparator, wildcard, startParam}
 const allowedCharsInPattern = allowedCharsInUrl + {wildcard, startParam, endParam}
 
@@ -514,15 +515,17 @@ proc route*[H](
   requestHeaders : HttpHeaders = newHttpHeaders(),
 ) : RoutingResult[H] {.noSideEffect.} =
   ## Find a mapping that matches the given request description
+  try:
+      let verb = requestMethod.toLowerAscii()
 
-  let verb = requestMethod.toLowerAscii()
+      if router.verbTrees.hasKey(verb):
+        result = matchTree(router.verbTrees[verb], ensureCorrectRoute(requestUri.path), requestHeaders)
 
-  if router.verbTrees.hasKey(verb):
-    result = matchTree(router.verbTrees[verb], ensureCorrectRoute(requestUri.path), requestHeaders)
-
-    if result.status == routingSuccess:
-      result.arguments.queryArgs = extractEncodedParams(requestUri.query)
-  else:
+        if result.status == routingSuccess:
+          result.arguments.queryArgs = extractEncodedParams(requestUri.query)
+      else:
+        result = RoutingResult[H](status:routingFailure)
+  except MappingError:
     result = RoutingResult[H](status:routingFailure)
 
 proc route*[H](
