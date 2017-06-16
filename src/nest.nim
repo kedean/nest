@@ -15,9 +15,10 @@ const allowedCharsInUrl = {'a'..'z', 'A'..'Z', '0'..'9', '-', '.', '_', '~', pat
 const wildcard = '*'
 const startParam = '{'
 const endParam = '}'
-const fullPathIndicator = '$'
+const consumeRemainingPathIndicator = '$'
 const specialSectionStartChars = {pathSeparator, wildcard, startParam}
-const allowedCharsInPattern = allowedCharsInUrl + {wildcard, startParam, endParam}
+const allowedCharsInPattern = allowedCharsInUrl + {wildcard, startParam, endParam, consumeRemainingPathIndicator}
+
 
 type
   HttpVerb* = enum ## Available methods to associate a mapped handler with
@@ -44,9 +45,11 @@ type
         discard
       of ptrnStartHeaderConstraint:
         headerName : string
+    consumeRemaining : bool
 
   # Structures for holding fully parsed mappings
   PatternNode[H] = ref object ## A node within a routing tree, usually constructed from a ``MapperKnot``
+    consumeRemaining : bool
     case kind : PatternMatchingType: # TODO: should be able to extend MapperKnot to get this, compiler wont let me, investigate further. Nim compiler bug maybe?
       of ptrnParam, ptrnText:
         value : string
@@ -64,6 +67,7 @@ type
         handler : H
       of false:
         discard
+
 
   # Router Structures
   Router*[H] = ref object ## Container that holds HTTP mappings to handler procs
@@ -106,7 +110,7 @@ proc `$`[H](node : PatternNode[H]) : string =
       result = $(node.kind) & ":"
     of ptrnStartHeaderConstraint:
       result = $(node.kind) & ":" & node.headerName & ", "
-  result = result & "leaf=" & $node.isLeaf & ", terminator=" & $node.isTerminator
+  result = result & "leaf=" & $node.isLeaf & ", terminator=" & $node.isTerminator & ", consumes remaining=" & $node.consumeRemaining
 proc `==`[H](node : PatternNode[H], knot : MapperKnot) : bool =
   result = (node.kind == knot.kind)
 
@@ -129,7 +133,7 @@ proc printRoutingTree[H](node : PatternNode[H], tabs : int = 0) =
     for child in node.children:
       printRoutingTree(child, tabs + 1)
 
-proc printRoutingTree[H](router : Router[H]) =
+proc printRoutingTree*[H](router : Router[H]) =
   for verb, tree in pairs(router.verbTrees):
     debugEcho verb.toUpper()
     printRoutingTree(tree)
@@ -181,12 +185,20 @@ proc generateRope(
     var scanner : MapperKnot
 
     if specialChar == wildcard:
-      scanner = MapperKnot(kind:ptrnWildcard)
+      if pattern[newStartIndex] == consumeRemainingPathIndicator:
+        newStartIndex += 1
+        scanner = MapperKnot(kind:ptrnWildcard, consumeRemaining:true)
+      else:
+        scanner = MapperKnot(kind:ptrnWildcard)
     elif specialChar == startParam:
       var paramName : string
       let paramNameSize = pattern.parseUntil(paramName, endParam, newStartIndex)
       newStartIndex += (paramNameSize + 1)
-      scanner = MapperKnot(kind:ptrnParam, value:paramName)
+      if pattern[newStartIndex] == consumeRemainingPathIndicator:
+        newStartIndex += 1
+        scanner = MapperKnot(kind:ptrnParam, value:paramName, consumeRemaining:true)
+      else:
+        scanner = MapperKnot(kind:ptrnParam, value:paramName)
     elif specialChar == pathSeparator:
       scanner = MapperKnot(kind:ptrnText, value:($pathSeparator))
     else:
@@ -226,9 +238,9 @@ proc terminatingPatternNode[H](
     of ptrnText:
       result = PatternNode[H](kind: ptrnText, value: knot.value, isLeaf: oldNode.isLeaf, isTerminator: true, handler: handler)
     of ptrnParam:
-      result = PatternNode[H](kind: ptrnParam, value: knot.value, isLeaf: oldNode.isLeaf, isTerminator: true, handler: handler)
+      result = PatternNode[H](kind: ptrnParam, value: knot.value, isLeaf: oldNode.isLeaf, isTerminator: true, handler: handler, consumeRemaining : knot.consumeRemaining)
     of ptrnWildcard:
-      result = PatternNode[H](kind: ptrnWildcard, isLeaf: oldNode.isLeaf, isTerminator: true, handler: handler)
+      result = PatternNode[H](kind: ptrnWildcard, isLeaf: oldNode.isLeaf, isTerminator: true, handler: handler, consumeRemaining : knot.consumeRemaining)
     of ptrnEndHeaderConstraint:
       result = PatternNode[H](kind: ptrnEndHeaderConstraint, isLeaf: oldNode.isLeaf, isTerminator: true, handler: handler)
     of ptrnStartHeaderConstraint:
@@ -245,9 +257,9 @@ proc parentalPatternNode[H](oldNode : PatternNode[H]) : PatternNode[H] =
     of ptrnText:
       result = PatternNode[H](kind: ptrnText, value: oldNode.value, isLeaf: false, children: newSeq[PatternNode[H]](), isTerminator: oldNode.isTerminator)
     of ptrnParam:
-      result = PatternNode[H](kind: ptrnParam, value: oldNode.value, isLeaf: false, children: newSeq[PatternNode[H]](), isTerminator: oldNode.isTerminator)
+      result = PatternNode[H](kind: ptrnParam, value: oldNode.value, isLeaf: false, children: newSeq[PatternNode[H]](), isTerminator: oldNode.isTerminator, consumeRemaining: oldNode.consumeRemaining)
     of ptrnWildcard:
-      result = PatternNode[H](kind: ptrnWildcard, isLeaf: false, children: newSeq[PatternNode[H]](), isTerminator: oldNode.isTerminator)
+      result = PatternNode[H](kind: ptrnWildcard, isLeaf: false, children: newSeq[PatternNode[H]](), isTerminator: oldNode.isTerminator, consumeRemaining: oldNode.consumeRemaining)
     of ptrnEndHeaderConstraint:
       result = PatternNode[H](kind: ptrnEndHeaderConstraint, isLeaf: false, children: newSeq[PatternNode[H]](), isTerminator: oldNode.isTerminator)
     of ptrnStartHeaderConstraint:
@@ -272,9 +284,9 @@ proc chainTree[H](rope : seq[MapperKnot], handler : H) : PatternNode[H] =
     of ptrnText:
       result = PatternNode[H](kind: ptrnText, value: knot.value, isLeaf: lastKnot, isTerminator: lastKnot)
     of ptrnParam:
-      result = PatternNode[H](kind: ptrnParam, value: knot.value, isLeaf: lastKnot, isTerminator: lastKnot)
+      result = PatternNode[H](kind: ptrnParam, value: knot.value, isLeaf: lastKnot, isTerminator: lastKnot, consumeRemaining: knot.consumeRemaining)
     of ptrnWildcard:
-      result = PatternNode[H](kind: ptrnWildcard, isLeaf: lastKnot, isTerminator: lastKnot)
+      result = PatternNode[H](kind: ptrnWildcard, isLeaf: lastKnot, isTerminator: lastKnot, consumeRemaining: knot.consumeRemaining)
     of ptrnEndHeaderConstraint:
       result = PatternNode[H](kind: ptrnEndHeaderConstraint, isLeaf: lastKnot, isTerminator: lastKnot)
     of ptrnStartHeaderConstraint:
@@ -448,17 +460,24 @@ proc matchTree[H](
           else:
             break matching
         of ptrnWildcard:
-          pathIndex = path.find(pathSeparator, pathIndex) #skip forward to the next separator
-          if pathIndex == -1:
+          if node.consumeRemaining:
             pathIndex = path.len
+          else:
+            pathIndex = path.find(pathSeparator, pathIndex) #skip forward to the next separator
+            if pathIndex == -1:
+              pathIndex = path.len
         of ptrnParam:
-          let newPathIndex = path.find(pathSeparator, pathIndex) #skip forward to the next separator
-          if newPathIndex == -1:
+          if node.consumeRemaining:
             pathArgs[node.value] = path[pathIndex.. ^1]
             pathIndex = path.len
           else:
-            pathArgs[node.value] = path[pathIndex..newPathIndex - 1]
-            pathIndex = newPathIndex
+            let newPathIndex = path.find(pathSeparator, pathIndex) #skip forward to the next separator
+            if newPathIndex == -1:
+              pathArgs[node.value] = path[pathIndex.. ^1]
+              pathIndex = path.len
+            else:
+              pathArgs[node.value] = path[pathIndex..newPathIndex - 1]
+              pathIndex = newPathIndex
         of ptrnStartHeaderConstraint:
           for child in node.children:
             var p = ""
