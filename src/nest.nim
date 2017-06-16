@@ -524,3 +524,12 @@ proc route*[H](
       result.arguments.queryArgs = extractEncodedParams(requestUri.query)
   else:
     result = RoutingResult[H](status:routingFailure)
+
+proc route*[H](
+    router : Router[H],
+    requestMethod : HttpMethod,
+    requestUri : URI,
+    requestHeaders : HttpHeaders = newHttpHeaders(),
+) : RoutingResult[H] {.noSideEffect.} =
+    ## Simple wrapper around the regular route function
+    route(router, $requestMethod, requestUri, requestHeaders)
