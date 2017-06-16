@@ -111,6 +111,16 @@ suite "Basic Mapping":
     expect MappingError:
       r.map(testHandler, $GET, "/has/*")
 
+  test "Greedy params must go at the end of a mapping":
+    let r = newRouter[proc()]()
+    expect MappingError:
+      r.map(testHandler, $GET, "/has/{p1}$/{p2}")
+
+  test "Greedy wildcards must go at the end of a mapping":
+    let r = newRouter[proc()]()
+    expect MappingError:
+      r.map(testHandler, $GET, "/has/*$/*")
+
   test "Wildcards only match one URL section":
     let r = newRouter[proc()]()
     r.map(testHandler, $GET, "/has/*/one")

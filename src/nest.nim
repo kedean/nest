@@ -187,6 +187,8 @@ proc generateRope(
     if specialChar == wildcard:
       if pattern[newStartIndex] == greedyIndicator:
         newStartIndex += 1
+        if pattern.len != newStartIndex:
+          raise newException(MappingError, "$ found before end of route")
         scanner = MapperKnot(kind:ptrnWildcard, isGreedy:true)
       else:
         scanner = MapperKnot(kind:ptrnWildcard)
@@ -196,6 +198,8 @@ proc generateRope(
       newStartIndex += (paramNameSize + 1)
       if pattern[newStartIndex] == greedyIndicator:
         newStartIndex += 1
+        if pattern.len != newStartIndex:
+          raise newException(MappingError, "$ found before end of route")
         scanner = MapperKnot(kind:ptrnParam, value:paramName, isGreedy:true)
       else:
         scanner = MapperKnot(kind:ptrnParam, value:paramName)
