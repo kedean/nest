@@ -48,3 +48,29 @@ suite "Parameter Capture":
     check(result.arguments.queryArgs["queryParam1"] == "queryVal")
     check(result.arguments.pathArgs.hasKey("pathParam1"))
     check(result.arguments.pathArgs["pathParam1"] == "pathVal")
+
+  test "Path param that consumes entire path":
+    let r = newRouter[proc()]()
+    r.map(testHandler, $GET, "/{pathParam1}$")
+    let result = r.route("GET", parseUri("/foo/bar/baz"))
+    check(result.status == routingSuccess)
+    check(result.arguments.pathArgs.hasKey("pathParam1"))
+    check(result.arguments.pathArgs["pathParam1"] == "foo/bar/baz")
+
+  test "Path param combined with consuming path param":
+    let r = newRouter[proc()]()
+    r.map(testHandler, $GET, "/{pathParam1}/{pathParam2}$")
+    let result = r.route("GET", parseUri("/foo/bar/baz"))
+    check(result.status == routingSuccess)
+    check(result.arguments.pathArgs.hasKey("pathParam1"))
+    check(result.arguments.pathArgs["pathParam1"] == "foo")
+    check(result.arguments.pathArgs.hasKey("pathParam2"))
+    check(result.arguments.pathArgs["pathParam2"] == "bar/baz")
+
+  test "Path param combined with consuming wildcard":
+    let r = newRouter[proc()]()
+    r.map(testHandler, $GET, "/{pathParam1}/*$")
+    let result = r.route("GET", parseUri("/foo/bar/baz"))
+    check(result.status == routingSuccess)
+    check(result.arguments.pathArgs.hasKey("pathParam1"))
+    check(result.arguments.pathArgs["pathParam1"] == "foo")
