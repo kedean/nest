@@ -120,5 +120,17 @@ suite "Basic Mapping":
   test "Invalid characters in URL":
     let r = newRouter[proc()]()
     r.map(testHandler, $GET, "/test/{param}")
-    let result = r.route("GET", parseUri("/test/$dollar"))
+    let result = r.route("GET", parseUri("/test/!/"))
     check(result.status == routingFailure)
+
+  test "Remaining path consumption with parameter":
+    let r = newRouter[proc()]()
+    r.map(testHandler, $GET, "/test/{param}$")
+    let result = r.route("GET", parseUri("/test/foo/bar/baz"))
+    check(result.status == routingSuccess)
+
+  test "Remaining path consumption with wildcard":
+    let r = newRouter[proc()]()
+    r.map(testHandler, $GET, "/test/*$")
+    let result = r.route("GET", parseUri("/test/foo/bar/baz"))
+    check(result.status == routingSuccess)
