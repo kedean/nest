@@ -333,6 +333,7 @@ proc contains[H](
   rope : seq[MapperKnot]
 ) : bool {.noSideEffect.} =
   ## Determines whether or not merging rope into node will create a mapping conflict
+  if rope.len == 0: return
   let knot = rope[0]
 
   # Is this node equal to the knot?
