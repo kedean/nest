@@ -144,3 +144,8 @@ suite "Basic Mapping":
     r.map(testHandler, $GET, "/test/*$")
     let result = r.route("GET", parseUri("/test/foo/bar/baz"))
     check(result.status == routingSuccess)
+
+  test "Map subpath after path":
+    let r = newRouter[proc()]()
+    r.map(testHandler, $GET, "/hello")
+    r.map(testHandler, $GET, "/") # Should not raise
