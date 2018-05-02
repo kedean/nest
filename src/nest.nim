@@ -158,6 +158,8 @@ proc ensureCorrectRoute(
 
   result = path
 
+  if result.len == 1 and result[0] == '/':
+    return
   if result[^1] == pathSeparator: #patterns should not end in a separator, it's redundant
     result = result[0..^2]
   if not (result[0] == '/'): #ensure each pattern is relative to root
@@ -195,7 +197,7 @@ proc generateRope(
     elif specialChar == startParam:
       var paramName : string
       let paramNameSize = pattern.parseUntil(paramName, endParam, newStartIndex)
-      newStartIndex += (paramNameSize + 1)
+      newStartIndex += (paramNameSize)
       if pattern[newStartIndex] == greedyIndicator:
         newStartIndex += 1
         if pattern.len != newStartIndex:
