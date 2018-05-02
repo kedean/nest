@@ -197,8 +197,8 @@ proc generateRope(
     elif specialChar == startParam:
       var paramName : string
       let paramNameSize = pattern.parseUntil(paramName, endParam, newStartIndex)
-      newStartIndex += (paramNameSize)
-      if pattern[newStartIndex] == greedyIndicator:
+      newStartIndex += (paramNameSize + 1)
+      if pattern.len > newStartIndex and pattern[newStartIndex] == greedyIndicator:
         newStartIndex += 1
         if pattern.len != newStartIndex:
           raise newException(MappingError, "$ found before end of route")
